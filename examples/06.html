@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>06 - A ray that bounces</title>
+        <link rel="stylesheet" href="style.css">
+    </head>
+    <body>
+        <main>
+            <div id="menu"></div>
+            <h1>06 - A ray that bounces</h1>
+
+            <canvas id="view" width="640" height="384"></canvas>
+
+            <div id="intro">
+                Drag the ring to reposition the source. The cross marks the aim and follows the pointer.
+                <br />
+                <button id="regenerate" type="button">Generate new layout</button>
+            </div>
+
+            <div id="details"></div>
+
+            <div id="usage">
+                <p>
+                    <code>cast(originX, originY, directionX, directionY, maxDistance, options)</code>
+                    <br />
+                    Cast, reflect the direction about <code>normalX</code> and <code>normalY</code>, cast again from where the ray stopped, and take what it traveled out of the budget.
+                    <br />
+                    The loop ends when the budget runs out or the reflections do.
+                </p>
+
+                <p>
+                    This is the first page that uses a normal rather than drawing it. Reflecting is one line: subtract twice the part of the direction that points into the surface.
+                </p>
+
+                <ul>
+                    <li>A reflected ray starts exactly on the surface it just met, and in floating point it may meet it again at distance zero and bounce there forever.</li>
+                    <li>Pushing the new origin a hundredth of a unit along the normal removes the whole class of problem.</li>
+                    <li><code>outOfBounds: 1</code> walls the map in, so the ray also bounces off its edges.</li>
+                </ul>
+            </div>
+        </main>
+
+        <script type="module">
+            import { Raycaster, TileGrid } from '../src/raycast.js';
+            import { renderMenu, renderTable, round, cellOf, faceName } from './script.js';
+
+            const tileSize = 32;
+            const rows = 15;
+            const columns = 25;
+            const density = 0.1;
+            const budget = 2500;
+            const maxBounces = 12;
+            const offset = 0.01;
+            const grabRadius = 16;
+
+            const canvas = document.getElementById('view');
+            const context = canvas.getContext('2d');
+            canvas.width = columns * tileSize;
+            canvas.height = rows * tileSize;
+
+            const state = {
+                map: null,
+                grid: null,
+                raycaster: null,
+                source: { x: 400, y: 240 },
+                aim: { x: 700, y: 100 },
+                grabbed: null
+            };
+
+            canvas.addEventListener('pointerdown', function (event) {
+                const point = pointerAt(event);
+                const nearSource = Math.hypot(point.x - state.source.x, point.y - state.source.y) < grabRadius;
+                state.grabbed = nearSource ? state.source : state.aim;
+                canvas.setPointerCapture(event.pointerId);
+                moveEnd(state.grabbed, point);
+            });
+
+            canvas.addEventListener('pointermove', function (event) {
+                moveEnd(state.grabbed || state.aim, pointerAt(event));
+            });
+
+            canvas.addEventListener('pointerup', function () {
+                state.grabbed = null;
+            });
+
+            canvas.addEventListener('pointercancel', function () {
+                state.grabbed = null;
+            });
+
+            document.getElementById('regenerate').addEventListener('click', function () {
+                generate();
+                draw();
+            });
+
+            renderMenu('menu', '06.html');
+            generate();
+            draw();
+
+            function generate() {
+                const map = [];
+                for (var i = 0; i < rows; i++) {
+                    const line = [];
+                    for (var j = 0; j < columns; j++) {
+                        line.push(Math.random() < density ? 1 : 0);
+                    }
+                    map.push(line);
+                }
+                state.map = map;
+                state.grid = new TileGrid({ map: map, tileSize: tileSize, outOfBounds: 1 });
+                state.raycaster = new Raycaster(state.grid);
+            }
+
+            function draw() {
+                const width = columns * tileSize;
+                const height = rows * tileSize;
+                const path = bouncePath();
+
+                context.clearRect(0, 0, width, height);
+                context.fillStyle = '#ffffff';
+                context.fillRect(0, 0, width, height);
+
+                context.strokeStyle = '#e9ecef';
+                context.lineWidth = 1;
+                context.beginPath();
+                for (var i = 1; i < columns; i++) {
+                    context.moveTo(i * tileSize + 0.5, 0);
+                    context.lineTo(i * tileSize + 0.5, height);
+                }
+                for (var i = 1; i < rows; i++) {
+                    context.moveTo(0, i * tileSize + 0.5);
+                    context.lineTo(width, i * tileSize + 0.5);
+                }
+                context.stroke();
+
+                context.fillStyle = '#ced4da';
+                context.strokeStyle = '#adb5bd';
+                for (var i = 0; i < rows; i++) {
+                    for (var j = 0; j < columns; j++) {
+                        if (state.map[i][j] !== 0) {
+                            context.fillRect(j * tileSize, i * tileSize, tileSize, tileSize);
+                            context.strokeRect(j * tileSize + 0.5, i * tileSize + 0.5, tileSize - 1, tileSize - 1);
+                        }
+                    }
+                }
+
+                context.lineWidth = 1.5;
+                context.strokeStyle = '#0d6efd';
+                for (var i = 1; i < path.points.length; i++) {
+                    context.globalAlpha = 1 - (i - 1) / (path.points.length + 1) * 0.7;
+                    context.beginPath();
+                    context.moveTo(path.points[i - 1].x, path.points[i - 1].y);
+                    context.lineTo(path.points[i].x, path.points[i].y);
+                    context.stroke();
+                }
+                context.globalAlpha = 1;
+
+                context.font = '10px system-ui';
+                context.textAlign = 'center';
+                context.textBaseline = 'middle';
+                for (var i = 0; i < path.hits.length; i++) {
+                    const hit = path.hits[i];
+
+                    context.strokeStyle = '#dc3545';
+                    context.lineWidth = 1;
+                    context.beginPath();
+                    context.moveTo(hit.pointX, hit.pointY);
+                    context.lineTo(hit.pointX + hit.normalX * 9, hit.pointY + hit.normalY * 9);
+                    context.stroke();
+
+                    context.fillStyle = '#dc3545';
+                    context.beginPath();
+                    context.arc(hit.pointX, hit.pointY, 3, 0, Math.PI * 2);
+                    context.fill();
+                    context.fillText(String(i + 1), hit.pointX + hit.normalX * 17, hit.pointY + hit.normalY * 17);
+                }
+
+                context.strokeStyle = '#212529';
+                context.lineWidth = state.grabbed === state.source ? 2.5 : 1.5;
+                context.beginPath();
+                context.arc(state.source.x, state.source.y, 5, 0, Math.PI * 2);
+                context.stroke();
+
+                context.lineWidth = state.grabbed === state.aim ? 2.5 : 1.5;
+                context.beginPath();
+                context.moveTo(state.aim.x - 6, state.aim.y);
+                context.lineTo(state.aim.x + 6, state.aim.y);
+                context.moveTo(state.aim.x, state.aim.y - 6);
+                context.lineTo(state.aim.x, state.aim.y + 6);
+                context.stroke();
+
+                report(path);
+            }
+
+            function report(path) {
+                const deltaX = state.aim.x - state.source.x;
+                const deltaY = state.aim.y - state.source.y;
+                const length = Math.hypot(deltaX, deltaY) || 1;
+                const angle = Math.atan2(deltaY, deltaX) * 180 / Math.PI;
+                const travelled = budget - path.left;
+
+                var result = 'still going: it ran out of budget in mid air';
+                if (path.hits.length === 0) {
+                    result = 'nothing met: the ray spent its whole budget in one leg';
+                }
+                else if (path.hits.length > maxBounces) {
+                    result = 'stopped after ' + maxBounces + ' reflections, with ' + round(path.left) + ' of budget still unspent';
+                }
+                else if (path.left <= 0.001) {
+                    result = 'the budget ran out after ' + path.hits.length + ' reflections';
+                }
+
+                const details = [
+                    [
+                        ['source', '(' + round(state.source.x) + ', ' + round(state.source.y) + ') cell (' + cellOf(state.source, state.grid) + ')'],
+                        ['aimed at', round(deltaX / length) + ', ' + round(deltaY / length) + ' - ' + round(angle) + '°'],
+                        ['budget', String(budget)],
+                        ['max bounces', String(maxBounces)]
+                    ],
+                    [
+                        ['legs', legList(path)]
+                    ],
+                    [
+                        ['result', result]
+                    ],
+                    [
+                        ['reflections', String(path.hits.length)],
+                        ['travelled', round(travelled)],
+                        ['unspent', round(path.left)],
+                        ['last contact', path.hits.length === 0 ? '-' : lastContact(path)]
+                    ]
+                ];
+
+                renderTable('details', details);
+            }
+
+            function bouncePath() {
+                const deltaX = state.aim.x - state.source.x;
+                const deltaY = state.aim.y - state.source.y;
+                const length = Math.hypot(deltaX, deltaY) || 1;
+                const points = [{ x: state.source.x, y: state.source.y }];
+                const hits = [];
+
+                var currentX = state.source.x;
+                var currentY = state.source.y;
+                var travelX = deltaX / length;
+                var travelY = deltaY / length;
+                var left = budget;
+
+                for (var i = 0; i <= maxBounces && left > 0.001; i++) {
+                    const hit = state.raycaster.cast(currentX, currentY, travelX, travelY, left, {
+                        ignoreInside: true
+                    });
+
+                    if (!hit) {
+                        points.push({ x: currentX + travelX * left, y: currentY + travelY * left });
+                        left = 0;
+                        break;
+                    }
+
+                    points.push({ x: hit.pointX, y: hit.pointY });
+                    hits.push(hit);
+                    left -= hit.distance;
+
+                    const into = travelX * hit.normalX + travelY * hit.normalY;
+                    travelX -= 2 * into * hit.normalX;
+                    travelY -= 2 * into * hit.normalY;
+                    currentX = hit.pointX + hit.normalX * offset;
+                    currentY = hit.pointY + hit.normalY * offset;
+                }
+
+                return { points: points, hits: hits, left: left };
+            }
+
+            function legList(path) {
+                const legs = [];
+
+                for (var i = 1; i < path.points.length; i++) {
+                    const from = path.points[i - 1];
+                    const to = path.points[i];
+                    legs.push(i + ': ' + round(Math.hypot(to.x - from.x, to.y - from.y)));
+                }
+
+                return legs.length === 0 ? '-' : legs.join(' ');
+            }
+
+            function lastContact(path) {
+                const hit = path.hits[path.hits.length - 1];
+                return '(' + round(hit.pointX) + ', ' + round(hit.pointY) + ') cell (' + hit.cellX + ', ' + hit.cellY + ') ' + faceName(hit);
+            }
+
+            function pointerAt(event) {
+                const rect = canvas.getBoundingClientRect();
+                return {
+                    x: (event.clientX - rect.left) * (columns * tileSize / rect.width),
+                    y: (event.clientY - rect.top) * (rows * tileSize / rect.height)
+                };
+            }
+
+            function moveEnd(end, point) {
+                end.x = point.x;
+                end.y = point.y;
+                draw();
+            }
+        </script>
+    </body>
+</html>

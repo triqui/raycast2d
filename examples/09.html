@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>09 - Thin walls and one-way surfaces</title>
+        <link rel="stylesheet" href="style.css">
+    </head>
+    <body>
+        <main>
+            <div id="menu"></div>
+            <h1>09 - Thin walls and one-way surfaces</h1>
+
+            <canvas id="view" width="640" height="384"></canvas>
+
+            <div id="intro">
+                Drag the ring to reposition the source. The cross marks the destination and follows the pointer.
+                <br />
+                <button class="pick on" id="withRule" type="button">apply the one-way rule</button>
+                <button class="pick" id="everything" type="button">let everything block</button>
+            </div>
+
+            <div id="details"></div>
+
+            <div id="usage">
+                <p>
+                    Thin is geometry, one-way is a rule, and the two are independent. All four combinations are on the map: a thick wall and a thin rail, each in a two-way and a one-way version.
+                </p>
+
+                <ul>
+                    <li>Grey obstacles are tiles, pink ones are loose rectangles.</li>
+                    <li>The hairs mark the side a one-way surface stops.</li>
+                    <li>Thickness is chosen when the obstacle is built; the direction it stops from is chosen by the filter, at the moment of the cast.</li>
+                </ul>
+
+                <p>
+                    <code>addRectangle(x, y, width, 0, userData)</code>
+                    <br />
+                    A rectangle of zero height blocks along a line rather than across a cell.
+                </p>
+
+                <ul>
+                    <li>A ray running exactly along it meets its end rather than passing by, since a rectangle of no height still has two short sides.</li>
+                    <li>A ray starting exactly on it meets it at distance zero with <code>startedInside</code> false, because there is no inside to be in, so <code>ignoreInside</code> will not skip it.</li>
+                </ul>
+
+                <p>
+                    The direction is on the data as a vector, and the filter is a dot product: <code>normalX * way.x + normalY * way.y &gt; 0.7</code> means stop only on the face whose normal is this. The same line works on a tile, on a rail and on a vertical door.
+                </p>
+
+                <p>
+                    On the grey one-way tile the bright edge suggests a line, but the whole cell blocks. Come at it from the side and the ray stops at the cell boundary, a whole tile before the edge that is drawn.
+                </p>
+            </div>
+        </main>
+
+        <script type="module">
+            import { Raycaster, TileGrid, ShapeSet } from '../src/raycast.js';
+            import { renderMenu, renderTable, round, cellOf } from './script.js';
+
+            const tileSize = 32;
+            const rows = 15;
+            const columns = 25;
+            const grabRadius = 16;
+
+            const canvas = document.getElementById('view');
+            const context = canvas.getContext('2d');
+            canvas.width = columns * tileSize;
+            canvas.height = rows * tileSize;
+
+            const definitions = {
+                1: { name: 'wall tile', thickness: 'a whole cell' },
+                2: { name: 'ledge tile', thickness: 'a whole cell', oneWay: { x: 0, y: -1 } }
+            };
+
+            const map = [];
+            for (var i = 0; i < rows; i++) {
+                map.push(new Array(columns).fill(0));
+            }
+            for (var i = 2; i <= 4; i++) {
+                map[6][i] = 1;
+            }
+            for (var i = 7; i <= 9; i++) {
+                map[6][i] = 2;
+            }
+
+            const grid = new TileGrid({ map: map, tileSize: tileSize, definitions: definitions });
+            const shapes = new ShapeSet({ cellSize: 64 });
+            shapes.addRectangle(384, 208, 96, 0, { name: 'rail', thickness: 'a line' });
+            shapes.addRectangle(544, 208, 96, 0, { name: 'one-way rail', thickness: 'a line', oneWay: { x: 0, y: -1 } });
+            shapes.addRectangle(720, 96, 0, 288, { name: 'door', thickness: 'a line', oneWay: { x: -1, y: 0 } });
+
+            const raycaster = new Raycaster([grid, shapes]);
+
+            const filters = {
+                withRule: function (candidate) {
+                    const way = candidate.userData && candidate.userData.oneWay;
+                    if (!way) {
+                        return true;
+                    }
+                    return candidate.normalX * way.x + candidate.normalY * way.y > 0.7;
+                },
+                everything: function () {
+                    return true;
+                }
+            };
+
+            const state = {
+                start: { x: 64, y: 96 },
+                finish: { x: 300, y: 320 },
+                rule: 'withRule',
+                grabbed: null
+            };
+
+            canvas.addEventListener('pointerdown', function (event) {
+                const point = pointerAt(event);
+                const nearStart = Math.hypot(point.x - state.start.x, point.y - state.start.y) < grabRadius;
+                state.grabbed = nearStart ? state.start : state.finish;
+                canvas.setPointerCapture(event.pointerId);
+                moveEnd(state.grabbed, point);
+            });
+
+            canvas.addEventListener('pointermove', function (event) {
+                moveEnd(state.grabbed || state.finish, pointerAt(event));
+            });
+
+            canvas.addEventListener('pointerup', function () {
+                state.grabbed = null;
+            });
+
+            canvas.addEventListener('pointercancel', function () {
+                state.grabbed = null;
+            });
+
+            ['withRule', 'everything'].forEach(function (name) {
+                document.getElementById(name).addEventListener('click', function () {
+                    state.rule = name;
+                    ['withRule', 'everything'].forEach(function (other) {
+                        document.getElementById(other).className = other === name ? 'pick on' : 'pick';
+                    });
+                    draw();
+                });
+            });
+
+            renderMenu('menu', '09.html');
+            draw();
+
+            function draw() {
+                const width = columns * tileSize;
+                const height = rows * tileSize;
+                const boxes = shapes.colliders;
+                const hit = raycaster.castTo(state.start.x, state.start.y, state.finish.x, state.finish.y, {
+                    filter: filters[state.rule],
+                    ignoreInside: true
+                });
+
+                context.clearRect(0, 0, width, height);
+                context.fillStyle = '#ffffff';
+                context.fillRect(0, 0, width, height);
+
+                context.strokeStyle = '#e9ecef';
+                context.lineWidth = 1;
+                context.beginPath();
+                for (var i = 1; i < columns; i++) {
+                    context.moveTo(i * tileSize + 0.5, 0);
+                    context.lineTo(i * tileSize + 0.5, height);
+                }
+                for (var i = 1; i < rows; i++) {
+                    context.moveTo(0, i * tileSize + 0.5);
+                    context.lineTo(width, i * tileSize + 0.5);
+                }
+                context.stroke();
+
+                for (var i = 0; i < rows; i++) {
+                    for (var j = 0; j < columns; j++) {
+                        const definition = definitions[map[i][j]];
+                        if (definition) {
+                            context.fillStyle = '#ced4da';
+                            context.fillRect(j * tileSize, i * tileSize, tileSize, tileSize);
+                            context.strokeStyle = '#adb5bd';
+                            context.lineWidth = 1;
+                            context.strokeRect(j * tileSize + 0.5, i * tileSize + 0.5, tileSize - 1, tileSize - 1);
+                            if (definition.oneWay) {
+                                drawHairs(j * tileSize, i * tileSize + tileSize / 2, tileSize, 0, definition.oneWay);
+                            }
+                        }
+                    }
+                }
+
+                for (var i = 0; i < boxes.length; i++) {
+                    context.strokeStyle = '#d63384';
+                    context.lineWidth = 2.5;
+                    context.beginPath();
+                    context.moveTo(boxes[i].x, boxes[i].y);
+                    context.lineTo(boxes[i].x + boxes[i].width, boxes[i].y + boxes[i].height);
+                    context.stroke();
+                    if (boxes[i].userData.oneWay) {
+                        drawHairs(boxes[i].x, boxes[i].y, boxes[i].width, boxes[i].height, boxes[i].userData.oneWay);
+                    }
+                }
+
+                const stopX = hit ? hit.pointX : state.finish.x;
+                const stopY = hit ? hit.pointY : state.finish.y;
+
+                context.strokeStyle = '#0d6efd';
+                context.lineWidth = 1.5;
+                context.beginPath();
+                context.moveTo(state.start.x, state.start.y);
+                context.lineTo(stopX, stopY);
+                context.stroke();
+
+                if (hit) {
+                    context.strokeStyle = '#adb5bd';
+                    context.lineWidth = 1;
+                    context.setLineDash([4, 4]);
+                    context.beginPath();
+                    context.moveTo(stopX, stopY);
+                    context.lineTo(state.finish.x, state.finish.y);
+                    context.stroke();
+                    context.setLineDash([]);
+
+                    context.fillStyle = '#dc3545';
+                    context.beginPath();
+                    context.arc(hit.pointX, hit.pointY, 3.5, 0, Math.PI * 2);
+                    context.fill();
+
+                    context.strokeStyle = '#dc3545';
+                    context.lineWidth = 1;
+                    context.beginPath();
+                    context.moveTo(hit.pointX, hit.pointY);
+                    context.lineTo(hit.pointX + hit.normalX * 12, hit.pointY + hit.normalY * 12);
+                    context.stroke();
+                }
+
+                context.strokeStyle = '#212529';
+                context.lineWidth = state.grabbed === state.start ? 2.5 : 1.5;
+                context.beginPath();
+                context.arc(state.start.x, state.start.y, 5, 0, Math.PI * 2);
+                context.stroke();
+
+                context.lineWidth = state.grabbed === state.finish ? 2.5 : 1.5;
+                context.beginPath();
+                context.moveTo(state.finish.x - 6, state.finish.y);
+                context.lineTo(state.finish.x + 6, state.finish.y);
+                context.moveTo(state.finish.x, state.finish.y - 6);
+                context.lineTo(state.finish.x, state.finish.y + 6);
+                context.stroke();
+
+                report(hit);
+            }
+
+            function report(hit) {
+                const deltaX = state.finish.x - state.start.x;
+                const deltaY = state.finish.y - state.start.y;
+                const span = Math.hypot(deltaX, deltaY);
+                const result = hit
+                    ? 'stopped by the ' + hit.userData.name + ', which is ' + hit.userData.thickness + ' thick, at (' + round(hit.pointX) + ', ' + round(hit.pointY) + ')'
+                    : 'clear: nothing in between';
+
+                const details = [
+                    [
+                        ['start', '(' + round(state.start.x) + ', ' + round(state.start.y) + ') cell (' + cellOf(state.start, grid) + ')'],
+                        ['finish', '(' + round(state.finish.x) + ', ' + round(state.finish.y) + ') cell (' + cellOf(state.finish, grid) + ')'],
+                        ['length', round(span)],
+                        ['filter', state.rule === 'withRule' ? 'the one-way rule' : 'everything blocks']
+                    ],
+                    [
+                        ['obstacles', obstacleList()]
+                    ],
+                    [
+                        ['result', result]
+                    ],
+                    [
+                        ['contact', hit ? '(' + round(hit.pointX) + ', ' + round(hit.pointY) + ')' : '-'],
+                        ['distance', hit ? round(hit.distance) : '-'],
+                        ['geometry', hit ? (hit.collider ? 'loose rectangle' : 'tile in cell (' + hit.cellX + ', ' + hit.cellY + ')') : '-'],
+                        ['normal', hit ? '(' + hit.normalX + ', ' + hit.normalY + ') ' + agreement(hit) : '-']
+                    ]
+                ];
+
+                renderTable('details', details);
+            }
+
+            function drawHairs(x, y, width, height, way) {
+                const steps = 4;
+
+                context.strokeStyle = '#6c757d';
+                context.lineWidth = 1;
+                context.beginPath();
+                for (var i = 1; i <= steps; i++) {
+                    const along = i / (steps + 1);
+                    const atX = x + width * along;
+                    const atY = y + height * along;
+                    context.moveTo(atX + way.x * 2, atY + way.y * 2);
+                    context.lineTo(atX + way.x * 8, atY + way.y * 8);
+                }
+                context.stroke();
+            }
+
+            function agreement(hit) {
+                const way = hit.userData.oneWay;
+                if (!way) {
+                    return 'two-way, so the rule never applies';
+                }
+                const dot = hit.normalX * way.x + hit.normalY * way.y;
+                return 'dot with the way is ' + round(dot) + ', so it ' + (dot > 0.7 ? 'stops' : 'lets through');
+            }
+
+            function obstacleList() {
+                const all = [];
+
+                Object.keys(definitions).forEach(function (id) {
+                    all.push(definitions[id]);
+                });
+                shapes.colliders.forEach(function (box) {
+                    all.push(box.userData);
+                });
+
+                return all.map(function (item) {
+                    return item.name + ': ' + item.thickness + ', ' + (item.oneWay ? 'one-way (' + item.oneWay.x + ', ' + item.oneWay.y + ')' : 'two-way');
+                }).join(' ');
+            }
+
+            function pointerAt(event) {
+                const rect = canvas.getBoundingClientRect();
+                return {
+                    x: (event.clientX - rect.left) * (columns * tileSize / rect.width),
+                    y: (event.clientY - rect.top) * (rows * tileSize / rect.height)
+                };
+            }
+
+            function moveEnd(end, point) {
+                end.x = point.x;
+                end.y = point.y;
+                draw();
+            }
+        </script>
+    </body>
+</html>

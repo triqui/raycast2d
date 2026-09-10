@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>Raycast2d - examples</title>
+        <link rel="stylesheet" href="style.css">
+    </head>
+    <body>
+        <main>
+            <h1>Raycast2d - examples</h1>
+
+            <div id="intro">
+                Each example imports <code>raycast.js</code> directl.
+            </div>
+
+            <ul id="list"></ul>
+        </main>
+
+        <script type="module">
+            import { examples } from './script.js';
+
+            const list = document.getElementById('list');
+
+            for (var i = 0; i < examples.length; i++) {
+                const item = document.createElement('li');
+                const link = document.createElement('a');
+                const description = document.createElement('span');
+
+                link.href = examples[i].file;
+                link.textContent = examples[i].title;
+                description.textContent = examples[i].description;
+
+                item.appendChild(link);
+                item.appendChild(document.createElement('br'));
+                item.appendChild(description);
+                list.appendChild(item);
+            }
+        </script>
+    </body>
+</html>

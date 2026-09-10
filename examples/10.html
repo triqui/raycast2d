@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>10 - A cone of vision</title>
+        <link rel="stylesheet" href="style.css">
+    </head>
+    <body>
+        <main>
+            <div id="menu"></div>
+            <h1>10 - A cone of vision</h1>
+
+            <canvas id="view" width="640" height="384"></canvas>
+
+            <div id="intro">
+                Drag the ring to reposition the guard, or the rectangle to move it out of sight.
+                <br />
+                <button id="regenerate" type="button">Generate new layout</button>
+            </div>
+
+            <div id="details"></div>
+
+            <div id="usage">
+                <p>
+                    <code>cast(originX, originY, directionX, directionY, maxDistance, options)</code>
+                    <br />
+                    Fired once per angle across the cone, it gives the shape the guard can actually see: the polygon its endpoints trace, closed back on the guard itself.
+                </p>
+
+                <p>
+                    <code>lineOfSight(startX, startY, endX, endY, options)</code>
+                    <br />
+                    Answers whether anything stands between two points. Being seen is two separate questions, and a guard that asks only the first one sees through walls.
+                </p>
+
+                <ul>
+                    <li>Is the corner inside the angle, and within range? That is arithmetic, not a cast.</li>
+                    <li>Is the line to it clear? That is the cast.</li>
+                </ul>
+
+                <p>
+                    The rectangle is tested at its four corners and its center. One point is enough to be spotted, which is why the cone turns red while most of the box is still hidden.
+                </p>
+            </div>
+        </main>
+
+        <script type="module">
+            import { Raycaster, TileGrid } from '../src/raycast.js';
+            import { renderMenu, renderTable, round, cellOf } from './script.js';
+
+            const tileSize = 32;
+            const rows = 15;
+            const columns = 25;
+            const density = 0.14;
+            const rayCount = 60;
+            const spread = 30 * Math.PI / 180;
+            const range = 340;
+            const grabRadius = 16;
+
+            const canvas = document.getElementById('view');
+            const context = canvas.getContext('2d');
+            canvas.width = columns * tileSize;
+            canvas.height = rows * tileSize;
+
+            const state = {
+                map: null,
+                grid: null,
+                raycaster: null,
+                guard: { x: 96, y: 192 },
+                facing: 0,
+                box: { x: 320, y: 176, width: 26, height: 26 },
+                pointer: { x: 333, y: 189 },
+                draggedBox: false,
+                grabbedGuard: false,
+                grabX: 0,
+                grabY: 0
+            };
+
+            canvas.addEventListener('pointerdown', function (event) {
+                const point = pointerAt(event);
+                canvas.setPointerCapture(event.pointerId);
+                state.pointer.x = point.x;
+                state.pointer.y = point.y;
+
+                if (insideBox(point.x, point.y)) {
+                    state.draggedBox = true;
+                    state.grabX = point.x - state.box.x;
+                    state.grabY = point.y - state.box.y;
+                    return;
+                }
+
+                if (Math.hypot(point.x - state.guard.x, point.y - state.guard.y) < grabRadius) {
+                    state.grabbedGuard = true;
+                    moveEnd(state.guard, point);
+                }
+            });
+
+            canvas.addEventListener('pointermove', function (event) {
+                const point = pointerAt(event);
+                state.pointer.x = point.x;
+                state.pointer.y = point.y;
+
+                if (state.draggedBox) {
+                    state.box.x = point.x - state.grabX;
+                    state.box.y = point.y - state.grabY;
+                    draw();
+                    return;
+                }
+
+                if (state.grabbedGuard) {
+                    moveEnd(state.guard, point);
+                    return;
+                }
+
+                state.facing = Math.atan2(point.y - state.guard.y, point.x - state.guard.x);
+                draw();
+            });
+
+            canvas.addEventListener('pointerup', function () {
+                state.draggedBox = false;
+                state.grabbedGuard = false;
+            });
+
+            canvas.addEventListener('pointercancel', function () {
+                state.draggedBox = false;
+                state.grabbedGuard = false;
+            });
+
+            document.getElementById('regenerate').addEventListener('click', function () {
+                generate();
+                draw();
+            });
+
+            renderMenu('menu', '10.html');
+            generate();
+            draw();
+
+            function generate() {
+                const map = [];
+                for (var i = 0; i < rows; i++) {
+                    const line = [];
+                    for (var j = 0; j < columns; j++) {
+                        line.push(Math.random() < density ? 1 : 0);
+                    }
+                    map.push(line);
+                }
+                state.map = map;
+                state.grid = new TileGrid({ map: map, tileSize: tileSize, outOfBounds: 1 });
+                state.raycaster = new Raycaster(state.grid);
+            }
+
+            function draw() {
+                const width = columns * tileSize;
+                const height = rows * tileSize;
+                const cone = castCone();
+                const spotted = spottedCorners();
+                const seen = spotted.some(function (corner) { return corner.visible; });
+                const edge = seen ? '#dc3545' : '#198754';
+                const fill = seen ? '#f8d7da' : '#d1e7dd';
+
+                context.clearRect(0, 0, width, height);
+                context.fillStyle = '#ffffff';
+                context.fillRect(0, 0, width, height);
+
+                context.beginPath();
+                context.moveTo(state.guard.x, state.guard.y);
+                for (var i = 0; i < cone.length; i++) {
+                    context.lineTo(cone[i].x, cone[i].y);
+                }
+                context.closePath();
+                context.fillStyle = fill;
+                context.fill();
+
+                context.strokeStyle = '#e9ecef';
+                context.lineWidth = 1;
+                context.beginPath();
+                for (var i = 1; i < columns; i++) {
+                    context.moveTo(i * tileSize + 0.5, 0);
+                    context.lineTo(i * tileSize + 0.5, height);
+                }
+                for (var i = 1; i < rows; i++) {
+                    context.moveTo(0, i * tileSize + 0.5);
+                    context.lineTo(width, i * tileSize + 0.5);
+                }
+                context.stroke();
+
+                context.fillStyle = '#ced4da';
+                context.strokeStyle = '#adb5bd';
+                for (var i = 0; i < rows; i++) {
+                    for (var j = 0; j < columns; j++) {
+                        if (state.map[i][j] !== 0) {
+                            context.fillRect(j * tileSize, i * tileSize, tileSize, tileSize);
+                            context.strokeRect(j * tileSize + 0.5, i * tileSize + 0.5, tileSize - 1, tileSize - 1);
+                        }
+                    }
+                }
+
+                context.strokeStyle = edge;
+                context.lineWidth = 1.5;
+                context.beginPath();
+                context.moveTo(state.guard.x, state.guard.y);
+                for (var i = 0; i < cone.length; i++) {
+                    context.lineTo(cone[i].x, cone[i].y);
+                }
+                context.closePath();
+                context.stroke();
+
+                context.fillStyle = fill;
+                context.fillRect(state.box.x, state.box.y, state.box.width, state.box.height);
+                context.strokeStyle = edge;
+                context.lineWidth = state.draggedBox ? 2.5 : 1.5;
+                context.strokeRect(state.box.x + 0.5, state.box.y + 0.5, state.box.width - 1, state.box.height - 1);
+
+                context.strokeStyle = '#dc3545';
+                context.fillStyle = '#dc3545';
+                context.lineWidth = 1;
+                for (var i = 0; i < spotted.length; i++) {
+                    if (spotted[i].visible) {
+                        context.beginPath();
+                        context.moveTo(state.guard.x, state.guard.y);
+                        context.lineTo(spotted[i].x, spotted[i].y);
+                        context.stroke();
+
+                        context.beginPath();
+                        context.arc(spotted[i].x, spotted[i].y, 3, 0, Math.PI * 2);
+                        context.fill();
+                    }
+                }
+
+                context.strokeStyle = '#212529';
+                context.lineWidth = state.grabbedGuard ? 2.5 : 1.5;
+                context.beginPath();
+                context.arc(state.guard.x, state.guard.y, 5, 0, Math.PI * 2);
+                context.stroke();
+                context.beginPath();
+                context.moveTo(state.guard.x, state.guard.y);
+                context.lineTo(state.guard.x + Math.cos(state.facing) * 14, state.guard.y + Math.sin(state.facing) * 14);
+                context.stroke();
+
+                context.lineWidth = 1.5;
+                context.beginPath();
+                context.moveTo(state.pointer.x - 6, state.pointer.y);
+                context.lineTo(state.pointer.x + 6, state.pointer.y);
+                context.moveTo(state.pointer.x, state.pointer.y - 6);
+                context.lineTo(state.pointer.x, state.pointer.y + 6);
+                context.stroke();
+
+                report(cone, spotted, seen);
+            }
+
+            function report(cone, spotted, seen) {
+                const center = { x: state.box.x + state.box.width / 2, y: state.box.y + state.box.height / 2 };
+                const distance = Math.hypot(center.x - state.guard.x, center.y - state.guard.y);
+
+                var inCone = 0;
+                var clear = 0;
+                var blocked = 0;
+
+                for (var i = 0; i < spotted.length; i++) {
+                    if (spotted[i].inCone) {
+                        inCone += 1;
+                    }
+                    if (spotted[i].visible) {
+                        clear += 1;
+                    }
+                }
+                for (var i = 0; i < cone.length; i++) {
+                    if (cone[i].blocked) {
+                        blocked += 1;
+                    }
+                }
+
+                var result = 'hidden: no corner of the box is inside the cone';
+                if (seen) {
+                    result = 'spotted: ' + clear + ' of ' + spotted.length + ' corners are inside the cone and in the open';
+                }
+                else if (inCone > 0) {
+                    result = 'hidden: ' + inCone + ' corners are inside the cone, but something stands in the way';
+                }
+
+                const details = [
+                    [
+                        ['guard', '(' + round(state.guard.x) + ', ' + round(state.guard.y) + ') cell (' + cellOf(state.guard, state.grid) + ')'],
+                        ['facing', round(state.facing * 180 / Math.PI) + '°'],
+                        ['field of view', round(spread * 180 / Math.PI) + '°'],
+                        ['range', String(range)]
+                    ],
+                    [
+                        ['corners', cornerList(spotted)]
+                    ],
+                    [
+                        ['result', result]
+                    ],
+                    [
+                        ['box', '(' + round(state.box.x) + ', ' + round(state.box.y) + ') ' + state.box.width + '×' + state.box.height],
+                        ['distance', round(distance)],
+                        ['inside the cone', inCone + ' of ' + spotted.length],
+                        ['rays blocked', blocked + ' of ' + rayCount]
+                    ]
+                ];
+
+                renderTable('details', details);
+            }
+
+            function castCone() {
+                const cone = [];
+
+                for (var i = 0; i < rayCount; i++) {
+                    const angle = state.facing - spread / 2 + spread * (i / (rayCount - 1));
+                    const directionX = Math.cos(angle);
+                    const directionY = Math.sin(angle);
+                    const hit = state.raycaster.cast(state.guard.x, state.guard.y, directionX, directionY, range, {
+                        ignoreInside: true
+                    });
+                    const distance = hit ? hit.distance : range;
+
+                    cone.push({
+                        x: state.guard.x + directionX * distance,
+                        y: state.guard.y + directionY * distance,
+                        distance: distance,
+                        blocked: hit !== null
+                    });
+                }
+
+                return cone;
+            }
+
+            function spottedCorners() {
+                const corners = [
+                    { x: state.box.x, y: state.box.y },
+                    { x: state.box.x + state.box.width, y: state.box.y },
+                    { x: state.box.x, y: state.box.y + state.box.height },
+                    { x: state.box.x + state.box.width, y: state.box.y + state.box.height },
+                    { x: state.box.x + state.box.width / 2, y: state.box.y + state.box.height / 2 }
+                ];
+
+                return corners.map(function (corner) {
+                    const deltaX = corner.x - state.guard.x;
+                    const deltaY = corner.y - state.guard.y;
+                    const distance = Math.hypot(deltaX, deltaY);
+                    const offAxis = Math.abs(angleBetween(state.facing, Math.atan2(deltaY, deltaX)));
+                    const inCone = distance <= range && offAxis <= spread / 2;
+                    const visible = inCone && state.raycaster.lineOfSight(state.guard.x, state.guard.y, corner.x, corner.y, {
+                        ignoreInside: true
+                    });
+
+                    return { x: corner.x, y: corner.y, distance: distance, offAxis: offAxis, inCone: inCone, visible: visible };
+                });
+            }
+
+            function angleBetween(from, to) {
+                return Math.atan2(Math.sin(to - from), Math.cos(to - from));
+            }
+
+            function cornerList(spotted) {
+                return spotted.map(function (corner, index) {
+                    const verdict = corner.visible ? 'seen' : (corner.inCone ? 'in the cone, blocked' : 'out of the cone');
+                    return (index + 1) + ': (' + round(corner.x) + ', ' + round(corner.y) + ') ' + round(corner.offAxis * 180 / Math.PI) + '° ' + verdict;
+                }).join(' ');
+            }
+
+            function insideBox(x, y) {
+                return x >= state.box.x && x <= state.box.x + state.box.width && y >= state.box.y && y <= state.box.y + state.box.height;
+            }
+
+            function pointerAt(event) {
+                const rect = canvas.getBoundingClientRect();
+                return {
+                    x: (event.clientX - rect.left) * (columns * tileSize / rect.width),
+                    y: (event.clientY - rect.top) * (rows * tileSize / rect.height)
+                };
+            }
+
+            function moveEnd(end, point) {
+                end.x = point.x;
+                end.y = point.y;
+                draw();
+            }
+        </script>
+    </body>
+</html>

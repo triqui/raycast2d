@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>04 - A fan of rays</title>
+        <link rel="stylesheet" href="style.css">
+    </head>
+    <body>
+        <main>
+            <div id="menu"></div>
+            <h1>04 - A fan of rays</h1>
+
+            <canvas id="view" width="640" height="384"></canvas>
+
+            <div id="intro">
+                The ring marks the source and follows the pointer. Drag it anywhere on the map.
+                <br />
+                <button id="regenerate" type="button">Generate new layout</button>
+            </div>
+
+            <div id="details"></div>
+
+            <div id="usage">
+                <p>
+                    <code>cast(originX, originY, directionX, directionY, maxDistance, options)</code>
+                    <br />
+                    Casts a single ray and returns the nearest object or tile that blocks it as a <code>RayHit</code>, or <code>null</code> if the ray reaches its full length without hitting anything.
+                    <br />
+                    The direction does not have to be a unit vector.
+                </p>
+
+                <p>
+                    This is the only method the page uses. The fan is <code>cast</code> called four hundred times, once per angle, and the lit shape is the polygon its endpoints trace.
+                </p>
+
+            </div>
+        </main>
+
+        <script type="module">
+            import { Raycaster, TileGrid } from '../src/raycast.js';
+            import { renderMenu, renderTable, round, cellOf } from './script.js';
+
+            const tileSize = 32;
+            const rows = 15;
+            const columns = 25;
+            const density = 0.17;
+            const rayCount = 400;
+            const maxDistance = 200;
+
+            const canvas = document.getElementById('view');
+            const context = canvas.getContext('2d');
+            canvas.width = columns * tileSize;
+            canvas.height = rows * tileSize;
+
+            const state = {
+                map: null,
+                grid: null,
+                raycaster: null,
+                source: { x: 400, y: 240 }
+            };
+
+            canvas.addEventListener('pointermove', function (event) {
+                moveEnd(state.source, pointerAt(event));
+            });
+
+            document.getElementById('regenerate').addEventListener('click', function () {
+                generate();
+                draw();
+            });
+
+            renderMenu('menu', '04.html');
+            generate();
+            draw();
+
+            function generate() {
+                const map = [];
+                for (var i = 0; i < rows; i++) {
+                    const line = [];
+                    for (var j = 0; j < columns; j++) {
+                        line.push(Math.random() < density ? 1 : 0);
+                    }
+                    map.push(line);
+                }
+                state.map = map;
+                state.grid = new TileGrid({ map: map, tileSize: tileSize, outOfBounds: 1 });
+                state.raycaster = new Raycaster(state.grid);
+            }
+
+            function draw() {
+                const width = columns * tileSize;
+                const height = rows * tileSize;
+                const fan = castFan();
+
+                context.clearRect(0, 0, width, height);
+                context.fillStyle = '#ffffff';
+                context.fillRect(0, 0, width, height);
+
+                context.beginPath();
+                context.moveTo(fan[0].x, fan[0].y);
+                for (var i = 1; i < fan.length; i++) {
+                    context.lineTo(fan[i].x, fan[i].y);
+                }
+                context.closePath();
+                context.fillStyle = '#e7f1ff';
+                context.fill();
+
+                context.strokeStyle = '#cfe2ff';
+                context.lineWidth = 1;
+                context.beginPath();
+                for (var i = 0; i < fan.length; i++) {
+                    context.moveTo(state.source.x, state.source.y);
+                    context.lineTo(fan[i].x, fan[i].y);
+                }
+                context.stroke();
+
+                context.strokeStyle = '#e9ecef';
+                context.lineWidth = 1;
+                context.beginPath();
+                for (var i = 1; i < columns; i++) {
+                    context.moveTo(i * tileSize + 0.5, 0);
+                    context.lineTo(i * tileSize + 0.5, height);
+                }
+                for (var i = 1; i < rows; i++) {
+                    context.moveTo(0, i * tileSize + 0.5);
+                    context.lineTo(width, i * tileSize + 0.5);
+                }
+                context.stroke();
+
+                context.fillStyle = '#ced4da';
+                context.strokeStyle = '#adb5bd';
+                for (var i = 0; i < rows; i++) {
+                    for (var j = 0; j < columns; j++) {
+                        if (state.map[i][j] !== 0) {
+                            context.fillRect(j * tileSize, i * tileSize, tileSize, tileSize);
+                            context.strokeRect(j * tileSize + 0.5, i * tileSize + 0.5, tileSize - 1, tileSize - 1);
+                        }
+                    }
+                }
+
+                context.strokeStyle = '#0d6efd';
+                context.lineWidth = 1.5;
+                context.beginPath();
+                context.moveTo(fan[0].x, fan[0].y);
+                for (var i = 1; i < fan.length; i++) {
+                    context.lineTo(fan[i].x, fan[i].y);
+                }
+                context.closePath();
+                context.stroke();
+
+                context.strokeStyle = '#212529';
+                context.lineWidth = 1.5;
+                context.beginPath();
+                context.arc(state.source.x, state.source.y, 5, 0, Math.PI * 2);
+                context.stroke();
+
+                report(fan);
+            }
+
+            function report(fan) {
+                const insideTile = state.grid.readTile(Math.floor(state.source.x / tileSize), Math.floor(state.source.y / tileSize)) !== 0;
+                const lit = polygonArea(fan);
+                const whole = columns * tileSize * rows * tileSize;
+
+                var blocked = 0;
+                var total = 0;
+                var nearest = fan[0];
+                var farthest = fan[0];
+
+                for (var i = 0; i < fan.length; i++) {
+                    if (fan[i].blocked) {
+                        blocked += 1;
+                    }
+                    total += fan[i].distance;
+                    if (fan[i].distance < nearest.distance) {
+                        nearest = fan[i];
+                    }
+                    if (fan[i].distance > farthest.distance) {
+                        farthest = fan[i];
+                    }
+                }
+
+                var result = blocked + ' of ' + rayCount + ' rays blocked, ' + (rayCount - blocked) + ' reached the limit';
+                if (insideTile) {
+                    result += ' - the source sits inside a tile';
+                }
+
+                const details = [
+                    [
+                        ['source', '(' + round(state.source.x) + ', ' + round(state.source.y) + ') cell (' + cellOf(state.source, state.grid) + ')'],
+                        ['rays', String(rayCount)],
+                        ['max distance', String(maxDistance)],
+                        ['step', round(360 / rayCount) + '°']
+                    ],
+                    [
+                        ['visible area', round(lit) + ' of ' + whole + ' - ' + round(lit / whole * 100) + '% of the map']
+                    ],
+                    [
+                        ['result', result]
+                    ],
+                    [
+                        ['nearest', '(' + round(nearest.x) + ', ' + round(nearest.y) + ') at ' + round(nearest.distance)],
+                        ['farthest', '(' + round(farthest.x) + ', ' + round(farthest.y) + ') at ' + round(farthest.distance)],
+                        ['average', round(total / rayCount)],
+                        ['unblocked', String(rayCount - blocked)]
+                    ]
+                ];
+
+                renderTable('details', details);
+            }
+
+            function castFan() {
+                const fan = [];
+
+                for (var i = 0; i < rayCount; i++) {
+                    const angle = (i / rayCount) * Math.PI * 2;
+                    const directionX = Math.cos(angle);
+                    const directionY = Math.sin(angle);
+                    const hit = state.raycaster.cast(state.source.x, state.source.y, directionX, directionY, maxDistance, {
+                        ignoreInside: true
+                    });
+                    const distance = hit ? hit.distance : maxDistance;
+
+                    fan.push({
+                        x: state.source.x + directionX * distance,
+                        y: state.source.y + directionY * distance,
+                        distance: distance,
+                        blocked: hit !== null
+                    });
+                }
+
+                return fan;
+            }
+
+            function polygonArea(fan) {
+                var twice = 0;
+
+                for (var i = 0; i < fan.length; i++) {
+                    const next = fan[(i + 1) % fan.length];
+                    twice += fan[i].x * next.y - next.x * fan[i].y;
+                }
+
+                return Math.abs(twice) / 2;
+            }
+
+            function pointerAt(event) {
+                const rect = canvas.getBoundingClientRect();
+                return {
+                    x: (event.clientX - rect.left) * (columns * tileSize / rect.width),
+                    y: (event.clientY - rect.top) * (rows * tileSize / rect.height)
+                };
+            }
+
+            function moveEnd(end, point) {
+                end.x = point.x;
+                end.y = point.y;
+                draw();
+            }
+        </script>
+    </body>
+</html>

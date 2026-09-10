@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>02 - Every contact along a ray</title>
+        <link rel="stylesheet" href="style.css">
+    </head>
+    <body>
+        <main>
+            <div id="menu"></div>
+            <h1>02 - Every contact along a ray</h1>
+
+            <canvas id="view" width="640" height="384"></canvas>
+
+            <div id="intro">
+                Drag the ring to reposition the source. The cross marks the destination and follows the pointer.
+                <br />
+                <button id="regenerate" type="button">Generate new layout</button>
+            </div>
+
+            <div id="details"></div>
+
+            <div id="usage">
+                <p>
+                    <code>castAll(originX, originY, directionX, directionY, maxDistance, options)</code>
+                    <br />
+                    Casts a ray and returns every object or tile along it as an array of <code>RayHit</code>, ordered from the nearest.
+                    <br />
+                    The array is empty if the ray reaches its full length without hitting anything.
+                </p>
+
+                <ul>
+                    <li>It takes a direction and a length rather than a second point, so the two ends are turned into a delta first.</li>
+                    <li><code>options.limit</code> keeps only the first few contacts.</li>
+                </ul>
+
+                <p>
+                    A wall has two surfaces, and a cast only reports the one facing the ray: an exit is a surface met from behind.
+                    <br />
+                    So the ray is cast twice, the second time from the far end backwards, which turns every exit into an entry the library reports normally.
+                </p>
+
+                <p>
+                    Pairing the two lists also tells real surfaces from false ones. <code>castAll</code> answers once per solid cell, so the boundary between the two halves of a thick wall is reported as well, and being inside the material it comes back from both directions. A real surface comes back from one direction only.
+                </p>
+
+                <p>
+                    <code>each(originX, originY, directionX, directionY, maxDistance, callback, options)</code>
+                    <br />
+                    Walks along the ray and calls the callback once for every cell it reaches, including empty cells.
+                </p>
+            </div>
+        </main>
+
+        <script type="module">
+            import { Raycaster, TileGrid } from '../src/raycast.js';
+            import { renderMenu, renderTable, round, cellOf, faceName } from './script.js';
+
+            const tileSize = 32;
+            const rows = 15;
+            const columns = 25;
+            const density = 0.17;
+            const grabRadius = 16;
+
+            const canvas = document.getElementById('view');
+            const context = canvas.getContext('2d');
+            canvas.width = columns * tileSize;
+            canvas.height = rows * tileSize;
+
+            const state = {
+                map: null,
+                grid: null,
+                raycaster: null,
+                start: { x: 48, y: 48 },
+                finish: { x: 752, y: 432 },
+                grabbed: null
+            };
+
+            canvas.addEventListener('pointerdown', function (event) {
+                const point = pointerAt(event);
+                const nearStart = Math.hypot(point.x - state.start.x, point.y - state.start.y) < grabRadius;
+                state.grabbed = nearStart ? state.start : state.finish;
+                canvas.setPointerCapture(event.pointerId);
+                moveEnd(state.grabbed, point);
+            });
+
+            canvas.addEventListener('pointermove', function (event) {
+                moveEnd(state.grabbed || state.finish, pointerAt(event));
+            });
+
+            canvas.addEventListener('pointerup', function () {
+                state.grabbed = null;
+            });
+
+            canvas.addEventListener('pointercancel', function () {
+                state.grabbed = null;
+            });
+
+            document.getElementById('regenerate').addEventListener('click', function () {
+                generate();
+                draw();
+            });
+
+            renderMenu('menu', '02.html');
+            generate();
+            draw();
+
+            function generate() {
+                const map = [];
+                for (var i = 0; i < rows; i++) {
+                    const line = [];
+                    for (var j = 0; j < columns; j++) {
+                        line.push(Math.random() < density ? 1 : 0);
+                    }
+                    map.push(line);
+                }
+                state.map = map;
+                state.grid = new TileGrid({ map: map, tileSize: tileSize });
+                state.raycaster = new Raycaster(state.grid);
+            }
+
+            function draw() {
+                const width = columns * tileSize;
+                const height = rows * tileSize;
+                const deltaX = state.finish.x - state.start.x;
+                const deltaY = state.finish.y - state.start.y;
+                const span = Math.hypot(deltaX, deltaY);
+
+                const hits = state.raycaster.castAll(state.start.x, state.start.y, deltaX, deltaY, span, {
+                    ignoreInside: true
+                });
+                const back = state.raycaster.castAll(state.finish.x, state.finish.y, -deltaX, -deltaY, span, {
+                    ignoreInside: true
+                });
+                const walls = wallsFrom(hits, back, span);
+                const crossed = crossedCells();
+
+                context.clearRect(0, 0, width, height);
+                context.fillStyle = '#ffffff';
+                context.fillRect(0, 0, width, height);
+
+                context.fillStyle = '#e7f1ff';
+                for (var i = 0; i < crossed.length; i++) {
+                    context.fillRect(crossed[i][0] * tileSize, crossed[i][1] * tileSize, tileSize, tileSize);
+                }
+
+                context.strokeStyle = '#e9ecef';
+                context.lineWidth = 1;
+                context.beginPath();
+                for (var i = 1; i < columns; i++) {
+                    context.moveTo(i * tileSize + 0.5, 0);
+                    context.lineTo(i * tileSize + 0.5, height);
+                }
+                for (var i = 1; i < rows; i++) {
+                    context.moveTo(0, i * tileSize + 0.5);
+                    context.lineTo(width, i * tileSize + 0.5);
+                }
+                context.stroke();
+
+                context.fillStyle = '#ced4da';
+                context.strokeStyle = '#adb5bd';
+                for (var i = 0; i < rows; i++) {
+                    for (var j = 0; j < columns; j++) {
+                        if (state.map[i][j] !== 0) {
+                            context.fillRect(j * tileSize, i * tileSize, tileSize, tileSize);
+                            context.strokeRect(j * tileSize + 0.5, i * tileSize + 0.5, tileSize - 1, tileSize - 1);
+                        }
+                    }
+                }
+
+                context.strokeStyle = '#0d6efd';
+                context.lineWidth = 1.5;
+                context.beginPath();
+                context.moveTo(state.start.x, state.start.y);
+                context.lineTo(state.finish.x, state.finish.y);
+                context.stroke();
+
+                context.font = '11px system-ui';
+                context.textAlign = 'center';
+                context.textBaseline = 'middle';
+                for (var i = 0; i < walls.length; i++) {
+                    const wall = walls[i];
+
+                    context.strokeStyle = '#dc3545';
+                    context.lineWidth = 3;
+                    context.beginPath();
+                    context.moveTo(wall.entryX, wall.entryY);
+                    context.lineTo(wall.exitX, wall.exitY);
+                    context.stroke();
+
+                    context.lineWidth = 1;
+                    context.beginPath();
+                    context.moveTo(wall.entryX, wall.entryY);
+                    context.lineTo(wall.entryX + wall.normalX * 10, wall.entryY + wall.normalY * 10);
+                    context.moveTo(wall.exitX, wall.exitY);
+                    context.lineTo(wall.exitX + wall.exitNormalX * 10, wall.exitY + wall.exitNormalY * 10);
+                    context.stroke();
+
+                    context.fillStyle = '#dc3545';
+                    context.beginPath();
+                    context.arc(wall.entryX, wall.entryY, 3.5, 0, Math.PI * 2);
+                    context.fill();
+
+                    context.fillStyle = '#ffffff';
+                    context.beginPath();
+                    context.arc(wall.exitX, wall.exitY, 3.5, 0, Math.PI * 2);
+                    context.fill();
+                    context.stroke();
+
+                    context.fillStyle = '#dc3545';
+                    context.fillText(String(i + 1), wall.entryX + wall.normalX * 18, wall.entryY + wall.normalY * 18);
+                }
+
+                context.strokeStyle = '#212529';
+                context.lineWidth = state.grabbed === state.start ? 2.5 : 1.5;
+                context.beginPath();
+                context.arc(state.start.x, state.start.y, 5, 0, Math.PI * 2);
+                context.stroke();
+
+                context.lineWidth = state.grabbed === state.finish ? 2.5 : 1.5;
+                context.beginPath();
+                context.moveTo(state.finish.x - 6, state.finish.y);
+                context.lineTo(state.finish.x + 6, state.finish.y);
+                context.moveTo(state.finish.x, state.finish.y - 6);
+                context.lineTo(state.finish.x, state.finish.y + 6);
+                context.stroke();
+
+                report(hits, walls, crossed);
+            }
+
+            function report(hits, walls, crossed) {
+                const deltaX = state.finish.x - state.start.x;
+                const deltaY = state.finish.y - state.start.y;
+                const span = Math.hypot(deltaX, deltaY);
+                const angle = Math.atan2(deltaY, deltaX) * 180 / Math.PI;
+                const startsInside = state.grid.readTile(Math.floor(state.start.x / tileSize), Math.floor(state.start.y / tileSize)) !== 0;
+
+                var result = hits.length === 0 ? 'clear: nothing in between' : hits.length + ' contacts, merged into ' + walls.length + (walls.length === 1 ? ' wall' : ' walls');
+                if (startsInside) {
+                    result += ' - the start sits inside a tile';
+                }
+
+                const details = [
+                    [
+                        ['start', '(' + round(state.start.x) + ', ' + round(state.start.y) + ') cell (' + cellOf(state.start, state.grid) + ')'],
+                        ['finish', '(' + round(state.finish.x) + ', ' + round(state.finish.y) + ') cell (' + cellOf(state.finish, state.grid) + ')'],
+                        ['length', round(span)],
+                        ['angle', round(angle) + '°']
+                    ],
+                    [
+                        ['cells crossed', cellList(crossed)]
+                    ],
+                    [
+                        ['result', result]
+                    ],
+                    [
+                        ['walls', wallList(walls)]
+                    ]
+                ];
+
+                renderTable('details', details);
+            }
+
+            function crossedCells() {
+                const deltaX = state.finish.x - state.start.x;
+                const deltaY = state.finish.y - state.start.y;
+                const reach = Math.hypot(deltaX, deltaY);
+                const crossed = [];
+
+                state.raycaster.each(state.start.x, state.start.y, deltaX, deltaY, reach, function (candidate) {
+                    crossed.push([candidate.cellX, candidate.cellY]);
+                });
+
+                return crossed;
+            }
+
+            function wallsFrom(forward, backward, span) {
+                const directionX = (state.finish.x - state.start.x) / (span || 1);
+                const directionY = (state.finish.y - state.start.y) / (span || 1);
+                const exits = backward.map(function (hit) {
+                    return { distance: span - hit.distance, normalX: hit.normalX, normalY: hit.normalY };
+                }).sort(function (left, right) {
+                    return left.distance - right.distance;
+                });
+                const walls = [];
+
+                for (var i = 0; i < forward.length; i++) {
+                    const shared = closeIndex(exits, forward[i].distance);
+                    if (shared === -1) {
+                        walls.push({
+                            entryX: forward[i].pointX,
+                            entryY: forward[i].pointY,
+                            normalX: forward[i].normalX,
+                            normalY: forward[i].normalY,
+                            distance: forward[i].distance,
+                            cells: 1
+                        });
+                    }
+                    else {
+                        exits.splice(shared, 1);
+                        if (walls.length > 0) {
+                            walls[walls.length - 1].cells += 1;
+                        }
+                    }
+                }
+
+                for (var i = 0; i < walls.length; i++) {
+                    const exit = i < exits.length ? exits[i] : null;
+                    const distance = exit ? exit.distance : span;
+                    walls[i].exitX = state.start.x + directionX * distance;
+                    walls[i].exitY = state.start.y + directionY * distance;
+                    walls[i].exitNormalX = exit ? exit.normalX : 0;
+                    walls[i].exitNormalY = exit ? exit.normalY : 0;
+                    walls[i].leftBehind = exit === null;
+                    walls[i].thickness = distance - walls[i].distance;
+                }
+
+                return walls;
+            }
+
+            function closeIndex(exits, value) {
+                for (var i = 0; i < exits.length; i++) {
+                    if (Math.abs(exits[i].distance - value) < 0.001) {
+                        return i;
+                    }
+                }
+                return -1;
+            }
+
+            function cellList(crossed) {
+                if (crossed.length === 0) {
+                    return '0';
+                }
+                return crossed.length + ': ' + crossed.map(function (cell) {
+                    return '(' + cell[0] + ', ' + cell[1] + ')';
+                }).join(' ');
+            }
+
+            function wallList(walls) {
+                if (walls.length === 0) {
+                    return '-';
+                }
+                return walls.map(function (wall, index) {
+                    return (index + 1) + ': in (' + round(wall.entryX) + ', ' + round(wall.entryY) + ') ' + faceName(wall) +
+                        ' - out (' + round(wall.exitX) + ', ' + round(wall.exitY) + ') ' + exitFace(wall) +
+                        ' - through ' + round(wall.thickness) + ' pixels of ' + wall.cells + ' tiles<br />';
+                }).join(' ');
+            }
+
+            function exitFace(wall) {
+                if (wall.leftBehind) {
+                    return 'no exit, the ray ends inside';
+                }
+                return faceName({ normalX: wall.exitNormalX, normalY: wall.exitNormalY });
+            }
+
+            function pointerAt(event) {
+                const rect = canvas.getBoundingClientRect();
+                return {
+                    x: (event.clientX - rect.left) * (columns * tileSize / rect.width),
+                    y: (event.clientY - rect.top) * (rows * tileSize / rect.height)
+                };
+            }
+
+            function moveEnd(end, point) {
+                end.x = point.x;
+                end.y = point.y;
+                draw();
+            }
+        </script>
+    </body>
+</html>

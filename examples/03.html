@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>03 - Two sources at once</title>
+        <link rel="stylesheet" href="style.css">
+    </head>
+    <body>
+        <main>
+            <div id="menu"></div>
+            <h1>03 - Two sources at once</h1>
+
+            <canvas id="view" width="640" height="384"></canvas>
+
+            <div id="intro">
+                Drag purple rectangles or the ring. The cross marks the destination and follows the pointer.
+                <br />
+                <button id="regenerate" type="button">Generate new layout</button>
+            </div>
+
+            <div id="details"></div>
+
+            <div id="usage">
+                <p>
+                    <code>new ShapeSet()</code>
+                    <br />
+                    A second kind of source, holding loose rectangles in world coordinates rather than tiles in a grid. None of these is 32 wide and none starts on a cell boundary.
+                </p>
+
+                <ul>
+                    <li><code>addRectangle(x, y, width, height, userData)</code>: adds a rectangle and returns it.</li>
+                    <li><code>update(collider)</code>: files a rectangle again in the spatial hash after it has moved.</li>
+                    <li><code>remove(collider)</code>: takes a rectangle out of the set.</li>
+                </ul>
+
+                <p>
+                    <code>new Raycaster([grid, shapes])</code>
+                    <br />
+                    The caster owns no geometry. It takes any number of sources, asks each of them in turn and keeps the nearest answer, shortening the ray as it goes.
+                </p>
+
+                <p>
+                    The hit says which source answered. <code>collider</code> and <code>userData</code> come from a shape set, <code>tileId</code> and <code>cellX</code> and <code>cellY</code> from a grid.
+                </p>
+            </div>
+        </main>
+
+        <script type="module">
+            import { Raycaster, TileGrid, ShapeSet } from '../src/raycast.js';
+            import { renderMenu, renderTable, round, cellOf, faceName } from './script.js';
+
+            const tileSize = 32;
+            const rows = 15;
+            const columns = 25;
+            const density = 0.13;
+            const boxCount = 4;
+            const grabRadius = 16;
+
+            const canvas = document.getElementById('view');
+            const context = canvas.getContext('2d');
+            canvas.width = columns * tileSize;
+            canvas.height = rows * tileSize;
+
+            const state = {
+                map: null,
+                grid: null,
+                shapes: null,
+                raycaster: null,
+                start: { x: 48, y: 48 },
+                finish: { x: 752, y: 432 },
+                draggedBox: null,
+                grabbedEnd: null,
+                grabX: 0,
+                grabY: 0
+            };
+
+            canvas.addEventListener('pointerdown', function (event) {
+                const point = pointerAt(event);
+                const box = boxAt(point.x, point.y);
+                canvas.setPointerCapture(event.pointerId);
+
+                if (box) {
+                    state.draggedBox = box;
+                    state.grabX = point.x - box.x;
+                    state.grabY = point.y - box.y;
+                    return;
+                }
+
+                const nearStart = Math.hypot(point.x - state.start.x, point.y - state.start.y) < grabRadius;
+                state.grabbedEnd = nearStart ? state.start : state.finish;
+                moveEnd(state.grabbedEnd, point);
+            });
+
+            canvas.addEventListener('pointermove', function (event) {
+                const point = pointerAt(event);
+
+                if (state.draggedBox) {
+                    state.draggedBox.x = point.x - state.grabX;
+                    state.draggedBox.y = point.y - state.grabY;
+                    state.shapes.update(state.draggedBox);
+                    draw();
+                    return;
+                }
+
+                moveEnd(state.grabbedEnd || state.finish, point);
+            });
+
+            canvas.addEventListener('pointerup', function () {
+                state.draggedBox = null;
+                state.grabbedEnd = null;
+            });
+
+            canvas.addEventListener('pointercancel', function () {
+                state.draggedBox = null;
+                state.grabbedEnd = null;
+            });
+
+            document.getElementById('regenerate').addEventListener('click', function () {
+                generate();
+                draw();
+            });
+
+            renderMenu('menu', '03.html');
+            generate();
+            draw();
+
+            function generate() {
+                const map = [];
+                for (var i = 0; i < rows; i++) {
+                    const line = [];
+                    for (var j = 0; j < columns; j++) {
+                        line.push(Math.random() < density ? 1 : 0);
+                    }
+                    map.push(line);
+                }
+                state.map = map;
+                state.grid = new TileGrid({ map: map, tileSize: tileSize });
+                state.shapes = new ShapeSet({ cellSize: 64 });
+
+                for (var i = 0; i < boxCount; i++) {
+                    const width = 14 + Math.round(Math.random() * 70);
+                    const height = 14 + Math.round(Math.random() * 70);
+                    state.shapes.addRectangle(
+                        Math.round(Math.random() * (columns * tileSize - width)),
+                        Math.round(Math.random() * (rows * tileSize - height)),
+                        width,
+                        height,
+                        { name: String.fromCharCode(65 + i) }
+                    );
+                }
+
+                state.raycaster = new Raycaster([state.grid, state.shapes]);
+            }
+
+            function draw() {
+                const width = columns * tileSize;
+                const height = rows * tileSize;
+                const boxes = state.shapes.colliders;
+                const hit = state.raycaster.castTo(state.start.x, state.start.y, state.finish.x, state.finish.y, {
+                    ignoreInside: true
+                });
+
+                context.clearRect(0, 0, width, height);
+                context.fillStyle = '#ffffff';
+                context.fillRect(0, 0, width, height);
+
+                context.strokeStyle = '#e9ecef';
+                context.lineWidth = 1;
+                context.beginPath();
+                for (var i = 1; i < columns; i++) {
+                    context.moveTo(i * tileSize + 0.5, 0);
+                    context.lineTo(i * tileSize + 0.5, height);
+                }
+                for (var i = 1; i < rows; i++) {
+                    context.moveTo(0, i * tileSize + 0.5);
+                    context.lineTo(width, i * tileSize + 0.5);
+                }
+                context.stroke();
+
+                context.fillStyle = '#ced4da';
+                context.strokeStyle = '#adb5bd';
+                for (var i = 0; i < rows; i++) {
+                    for (var j = 0; j < columns; j++) {
+                        if (state.map[i][j] !== 0) {
+                            context.fillRect(j * tileSize, i * tileSize, tileSize, tileSize);
+                            context.strokeRect(j * tileSize + 0.5, i * tileSize + 0.5, tileSize - 1, tileSize - 1);
+                        }
+                    }
+                }
+
+                context.font = '11px system-ui';
+                context.textAlign = 'center';
+                context.textBaseline = 'middle';
+                for (var i = 0; i < boxes.length; i++) {
+                    context.fillStyle = '#e2d9f3';
+                    context.fillRect(boxes[i].x, boxes[i].y, boxes[i].width, boxes[i].height);
+                    context.strokeStyle = '#6f42c1';
+                    context.lineWidth = boxes[i] === state.draggedBox ? 2.5 : 1.5;
+                    context.strokeRect(boxes[i].x + 0.5, boxes[i].y + 0.5, boxes[i].width - 1, boxes[i].height - 1);
+                    context.fillStyle = '#6f42c1';
+                    context.fillText(boxes[i].userData.name, boxes[i].x + boxes[i].width / 2, boxes[i].y + boxes[i].height / 2);
+                }
+
+                const stopX = hit ? hit.pointX : state.finish.x;
+                const stopY = hit ? hit.pointY : state.finish.y;
+
+                context.strokeStyle = '#0d6efd';
+                context.lineWidth = 1.5;
+                context.beginPath();
+                context.moveTo(state.start.x, state.start.y);
+                context.lineTo(stopX, stopY);
+                context.stroke();
+
+                if (hit) {
+                    context.strokeStyle = '#adb5bd';
+                    context.lineWidth = 1;
+                    context.setLineDash([4, 4]);
+                    context.beginPath();
+                    context.moveTo(stopX, stopY);
+                    context.lineTo(state.finish.x, state.finish.y);
+                    context.stroke();
+                    context.setLineDash([]);
+
+                    context.fillStyle = '#dc3545';
+                    context.beginPath();
+                    context.arc(hit.pointX, hit.pointY, 3.5, 0, Math.PI * 2);
+                    context.fill();
+
+                    context.strokeStyle = '#dc3545';
+                    context.lineWidth = 1;
+                    context.beginPath();
+                    context.moveTo(hit.pointX, hit.pointY);
+                    context.lineTo(hit.pointX + hit.normalX * 12, hit.pointY + hit.normalY * 12);
+                    context.stroke();
+                }
+
+                context.strokeStyle = '#212529';
+                context.lineWidth = state.grabbedEnd === state.start ? 2.5 : 1.5;
+                context.beginPath();
+                context.arc(state.start.x, state.start.y, 5, 0, Math.PI * 2);
+                context.stroke();
+
+                context.lineWidth = state.grabbedEnd === state.finish ? 2.5 : 1.5;
+                context.beginPath();
+                context.moveTo(state.finish.x - 6, state.finish.y);
+                context.lineTo(state.finish.x + 6, state.finish.y);
+                context.moveTo(state.finish.x, state.finish.y - 6);
+                context.lineTo(state.finish.x, state.finish.y + 6);
+                context.stroke();
+
+                report(hit);
+            }
+
+            function report(hit) {
+                const deltaX = state.finish.x - state.start.x;
+                const deltaY = state.finish.y - state.start.y;
+                const span = Math.hypot(deltaX, deltaY);
+                const angle = Math.atan2(deltaY, deltaX) * 180 / Math.PI;
+                const result = hit ? 'blocked by the ' + (hit.collider ? 'shape set' : 'tile grid') : 'clear: nothing in between';
+
+                const details = [
+                    [
+                        ['start', '(' + round(state.start.x) + ', ' + round(state.start.y) + ') cell (' + cellOf(state.start, state.grid) + ')'],
+                        ['finish', '(' + round(state.finish.x) + ', ' + round(state.finish.y) + ') cell (' + cellOf(state.finish, state.grid) + ')'],
+                        ['length', round(span)],
+                        ['angle', round(angle) + '°']
+                    ],
+                    [
+                        ['rectangles', boxList()]
+                    ],
+                    [
+                        ['result', result]
+                    ],
+                    [
+                        ['contact', hit ? '(' + round(hit.pointX) + ', ' + round(hit.pointY) + ')' : '-'],
+                        ['distance', hit ? round(hit.distance) : '-'],
+                        ['source', hit ? sourceOf(hit) : '-'],
+                        ['normal', hit ? '(' + hit.normalX + ', ' + hit.normalY + ') ' + faceName(hit) : '-']
+                    ]
+                ];
+
+                renderTable('details', details);
+            }
+
+            function sourceOf(hit) {
+                if (hit.collider) {
+                    return 'shape set, box ' + hit.userData.name;
+                }
+                return 'tile grid, cell (' + hit.cellX + ', ' + hit.cellY + ')';
+            }
+
+            function boxList() {
+                return state.shapes.colliders.map(function (box) {
+                    return box.userData.name + ': (' + round(box.x) + ', ' + round(box.y) + ') ' + box.width + '×' + box.height;
+                }).join(' ');
+            }
+
+            function boxAt(x, y) {
+                const boxes = state.shapes.colliders;
+                for (var i = boxes.length - 1; i >= 0; i--) {
+                    if (x >= boxes[i].x && x <= boxes[i].x + boxes[i].width && y >= boxes[i].y && y <= boxes[i].y + boxes[i].height) {
+                        return boxes[i];
+                    }
+                }
+                return null;
+            }
+
+            function pointerAt(event) {
+                const rect = canvas.getBoundingClientRect();
+                return {
+                    x: (event.clientX - rect.left) * (columns * tileSize / rect.width),
+                    y: (event.clientY - rect.top) * (rows * tileSize / rect.height)
+                };
+            }
+
+            function moveEnd(end, point) {
+                end.x = point.x;
+                end.y = point.y;
+                draw();
+            }
+        </script>
+    </body>
+</html>

@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>01 - A ray between two points</title>
+        <link rel="stylesheet" href="style.css">
+    </head>
+    <body>
+        <main>
+            <div id="menu"></div>
+            <h1>01 - A ray between two points</h1>
+
+            <canvas id="view" width="640" height="384"></canvas>
+
+            <div id="intro">
+                Drag the ring to reposition the source. The cross marks the destination and follows the pointer.
+                <br />
+                <button id="regenerate" type="button">Generate new layout</button>
+            </div>
+
+            <div id="details"></div>
+
+            <div id="usage">
+                <p>
+                    <code>castTo(startX, startY, endX, endY, options)</code>
+                    <br />
+                    Casts a ray from <code>(startX, startY)</code> to <code>(endX, endY)</code> and returns the nearest object or tile that blocks it as a <code>RayHit</code>.
+                </p>
+
+                <ul>
+                    <li><code>pointX</code> and <code>pointY</code>: the point where the ray stopped.</li>
+                    <li><code>distance</code>: the distance traveled along the ray.</li>
+                    <li><code>normalX</code> and <code>normalY</code>: the normal of the surface that was hit.</li>
+                    <li><code>tileId</code>: the ID of the tile that was hit.</li>
+                    <li><code>cellX</code> and <code>cellY</code>: the coordinates of the cell containing the hit.</li>
+                </ul>
+
+                <p>
+                    It returns <code>null</code> if the ray reaches its destination without hitting anything.
+                    <br />
+                    <code>options.ignoreInside</code> makes the ray ignore geometry that contains its starting point.
+                </p>
+
+                <p>
+                    <code>each(originX, originY, directionX, directionY, maxDistance, callback, options)</code>
+                    <br />
+                    Walks along the ray and calls the callback once for every cell it reaches, including empty cells.
+                    <br />
+                    Returning <code>false</code> from the callback stops the traversal early.
+                </p>
+            </div>
+        </main>
+
+        <script type="module">
+            import { Raycaster, TileGrid } from '../src/raycast.js';
+            import { renderMenu, renderTable, round, cellOf, faceName } from './script.js';
+
+            const tileSize = 32;
+            const rows = 15;
+            const columns = 25;
+            const density = 0.17;
+            const grabRadius = 16;
+
+            const canvas = document.getElementById('view');
+            const context = canvas.getContext('2d');
+            canvas.width = columns * tileSize;
+            canvas.height = rows * tileSize;
+
+            const state = {
+                map: null,
+                grid: null,
+                raycaster: null,
+                start: { x: 48, y: 48 },
+                finish: { x: 752, y: 432 },
+                grabbed: null
+            };
+
+            canvas.addEventListener('pointerdown', function (event) {
+                const point = pointerAt(event);
+                const nearStart = Math.hypot(point.x - state.start.x, point.y - state.start.y) < grabRadius;
+                state.grabbed = nearStart ? state.start : state.finish;
+                canvas.setPointerCapture(event.pointerId);
+                moveEnd(state.grabbed, point);
+            });
+
+            canvas.addEventListener('pointermove', function (event) {
+                moveEnd(state.grabbed || state.finish, pointerAt(event));
+            });
+
+            canvas.addEventListener('pointerup', function () {
+                state.grabbed = null;
+            });
+
+            canvas.addEventListener('pointercancel', function () {
+                state.grabbed = null;
+            });
+
+            document.getElementById('regenerate').addEventListener('click', function () {
+                generate();
+                draw();
+            });
+
+            renderMenu('menu', '01.html');
+            generate();
+            draw();
+
+            function generate() {
+                const map = [];
+                for (var i = 0; i < rows; i++) {
+                    const line = [];
+                    for (var j = 0; j < columns; j++) {
+                        line.push(Math.random() < density ? 1 : 0);
+                    }
+                    map.push(line);
+                }
+                state.map = map;
+                state.grid = new TileGrid({ map: map, tileSize: tileSize });
+                state.raycaster = new Raycaster(state.grid);
+            }
+
+            function draw() {
+                const width = columns * tileSize;
+                const height = rows * tileSize;
+                const hit = state.raycaster.castTo(state.start.x, state.start.y, state.finish.x, state.finish.y, {
+                    ignoreInside: true
+                });
+                const crossed = crossedCells(hit);
+
+                context.clearRect(0, 0, width, height);
+                context.fillStyle = '#ffffff';
+                context.fillRect(0, 0, width, height);
+
+                context.fillStyle = '#e7f1ff';
+                for (var i = 0; i < crossed.length; i++) {
+                    context.fillRect(crossed[i][0] * tileSize, crossed[i][1] * tileSize, tileSize, tileSize);
+                }
+
+                context.strokeStyle = '#e9ecef';
+                context.lineWidth = 1;
+                context.beginPath();
+                for (var i = 1; i < columns; i++) {
+                    context.moveTo(i * tileSize + 0.5, 0);
+                    context.lineTo(i * tileSize + 0.5, height);
+                }
+                for (var i = 1; i < rows; i++) {
+                    context.moveTo(0, i * tileSize + 0.5);
+                    context.lineTo(width, i * tileSize + 0.5);
+                }
+                context.stroke();
+
+                context.fillStyle = '#ced4da';
+                context.strokeStyle = '#adb5bd';
+                for (var i = 0; i < rows; i++) {
+                    for (var j = 0; j < columns; j++) {
+                        if (state.map[i][j] !== 0) {
+                            context.fillRect(j * tileSize, i * tileSize, tileSize, tileSize);
+                            context.strokeRect(j * tileSize + 0.5, i * tileSize + 0.5, tileSize - 1, tileSize - 1);
+                        }
+                    }
+                }
+
+                const stopX = hit ? hit.pointX : state.finish.x;
+                const stopY = hit ? hit.pointY : state.finish.y;
+
+                context.strokeStyle = '#0d6efd';
+                context.lineWidth = 1.5;
+                context.beginPath();
+                context.moveTo(state.start.x, state.start.y);
+                context.lineTo(stopX, stopY);
+                context.stroke();
+
+                if (hit) {
+                    context.strokeStyle = '#adb5bd';
+                    context.lineWidth = 1;
+                    context.setLineDash([4, 4]);
+                    context.beginPath();
+                    context.moveTo(stopX, stopY);
+                    context.lineTo(state.finish.x, state.finish.y);
+                    context.stroke();
+                    context.setLineDash([]);
+
+                    context.fillStyle = '#dc3545';
+                    context.beginPath();
+                    context.arc(hit.pointX, hit.pointY, 3.5, 0, Math.PI * 2);
+                    context.fill();
+
+                    context.strokeStyle = '#dc3545';
+                    context.lineWidth = 1;
+                    context.beginPath();
+                    context.moveTo(hit.pointX, hit.pointY);
+                    context.lineTo(hit.pointX + hit.normalX * 12, hit.pointY + hit.normalY * 12);
+                    context.stroke();
+                }
+
+                context.strokeStyle = '#212529';
+                context.lineWidth = state.grabbed === state.start ? 2.5 : 1.5;
+                context.beginPath();
+                context.arc(state.start.x, state.start.y, 5, 0, Math.PI * 2);
+                context.stroke();
+
+                context.lineWidth = state.grabbed === state.finish ? 2.5 : 1.5;
+                context.beginPath();
+                context.moveTo(state.finish.x - 6, state.finish.y);
+                context.lineTo(state.finish.x + 6, state.finish.y);
+                context.moveTo(state.finish.x, state.finish.y - 6);
+                context.lineTo(state.finish.x, state.finish.y + 6);
+                context.stroke();
+
+                report(hit, crossed);
+            }
+
+            function report(hit, crossed) {
+                const deltaX = state.finish.x - state.start.x;
+                const deltaY = state.finish.y - state.start.y;
+                const span = Math.hypot(deltaX, deltaY);
+                const angle = Math.atan2(deltaY, deltaX) * 180 / Math.PI;
+                const startsInside = state.grid.readTile(Math.floor(state.start.x / tileSize), Math.floor(state.start.y / tileSize)) !== 0;
+
+                var result = hit ? 'blocked' : 'clear: nothing in between';
+                if (startsInside) {
+                    result += ' - the start sits inside a tile';
+                }
+
+                const details = [
+                    [
+                        ['start', '(' + round(state.start.x) + ', ' + round(state.start.y) + ') cell (' + cellOf(state.start, state.grid) + ')'],
+                        ['finish', '(' + round(state.finish.x) + ', ' + round(state.finish.y) + ') cell (' + cellOf(state.finish, state.grid) + ')'],
+                        ['length', round(span)],
+                        ['angle', round(angle) + '°']
+                    ],
+                    [
+                        ['cells crossed', cellList(crossed)]
+                    ],
+                    [
+                        ['result', result]
+                    ],
+                    [
+                        ['contact', hit ? '(' + round(hit.pointX) + ', ' + round(hit.pointY) + ')' : '-'],
+                        ['distance', hit ? round(hit.distance) : '-'],
+                        ['cell', hit ? '(' + hit.cellX + ', ' + hit.cellY + ')' : '-'],
+                        ['normal', hit ? '(' + hit.normalX + ', ' + hit.normalY + ') ' + faceName(hit) : '-']
+                    ]
+                ];
+
+                renderTable('details', details);
+            }
+
+            function crossedCells(hit) {
+                const deltaX = state.finish.x - state.start.x;
+                const deltaY = state.finish.y - state.start.y;
+                const reach = hit ? hit.distance : Math.hypot(deltaX, deltaY);
+                const crossed = [];
+
+                state.raycaster.each(state.start.x, state.start.y, deltaX, deltaY, reach, function (candidate) {
+                    const stoppedTheRay = hit && candidate.cellX === hit.cellX && candidate.cellY === hit.cellY;
+                    if (!stoppedTheRay) {
+                        crossed.push([candidate.cellX, candidate.cellY]);
+                    }
+                });
+
+                return crossed;
+            }
+
+            function cellList(crossed) {
+                if (crossed.length === 0) {
+                    return '0';
+                }
+                return crossed.length + ': ' + crossed.map(function (cell) {
+                    return '(' + cell[0] + ', ' + cell[1] + ')';
+                }).join(' ');
+            }
+
+            function pointerAt(event) {
+                const rect = canvas.getBoundingClientRect();
+                return {
+                    x: (event.clientX - rect.left) * (columns * tileSize / rect.width),
+                    y: (event.clientY - rect.top) * (rows * tileSize / rect.height)
+                };
+            }
+
+            function moveEnd(end, point) {
+                end.x = point.x;
+                end.y = point.y;
+                draw();
+            }
+        </script>
+    </body>
+</html>

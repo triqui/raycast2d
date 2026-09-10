@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>05 - Moving a rectangle</title>
+        <link rel="stylesheet" href="style.css">
+    </head>
+    <body>
+        <main>
+            <div id="menu"></div>
+            <h1>05 - Moving a rectangle</h1>
+
+            <canvas id="view" width="640" height="384"></canvas>
+
+            <div id="intro">
+                The green rectangle goes as far towards the pointer as it can. Drag anywhere on the map to pull it.
+                <br />
+                <button id="regenerate" type="button">Generate new layout</button>
+            </div>
+
+            <div id="details"></div>
+
+            <div id="usage">
+                <p>
+                    <code>cast(originX, originY, directionX, directionY, maxDistance, options)</code>
+                    <br />
+                    The only method the page uses, and the answer to a question the library does not ask: how far can a rectangle go?
+                    <br />
+                    A row of rays leaves the leading edge of the box in the direction of travel, and the shortest of them decides.
+                </p>
+
+                <ul>
+                    <li>The outermost two rays start half a unit inside the corners, or a box sliding along a wall would catch on it.</li>
+                    <li>The two axes are resolved one at a time, sideways first, each from the edge that leads on that axis.</li>
+                    <li>A single diagonal test cannot tell which side of a corner it belongs to, and whichever it picks is wrong half the time.</li>
+                    <li>Resolving separately is also what makes the box slide along a wall instead of stopping dead against it.</li>
+                </ul>
+
+                <p>
+                    Anything narrower than the spacing between rays can pass between two of them unseen. Keep the spacing below the size of the smallest obstacle and it never comes up.
+                </p>
+            </div>
+        </main>
+
+        <script type="module">
+            import { Raycaster, TileGrid } from '../src/raycast.js';
+            import { renderMenu, renderTable, round, faceName } from './script.js';
+
+            const tileSize = 32;
+            const rows = 15;
+            const columns = 25;
+            const density = 0.13;
+            const spacing = 8;
+            const inset = 0.5;
+            const skin = 0.02;
+
+            const canvas = document.getElementById('view');
+            const context = canvas.getContext('2d');
+            canvas.width = columns * tileSize;
+            canvas.height = rows * tileSize;
+
+            const state = {
+                map: null,
+                grid: null,
+                raycaster: null,
+                box: { x: 64, y: 64, width: 26, height: 44 },
+                target: { x: 77, y: 86 },
+                requested: { x: 0, y: 0 },
+                allowed: { x: 0, y: 0 },
+                probes: [],
+                hitX: null,
+                hitY: null
+            };
+
+            canvas.addEventListener('pointermove', function (event) {
+                const point = pointerAt(event);
+                move(point.x, point.y);
+            });
+
+            document.getElementById('regenerate').addEventListener('click', function () {
+                generate();
+                draw();
+            });
+
+            renderMenu('menu', '05.html');
+            generate();
+            draw();
+
+            function generate() {
+                const map = [];
+                for (var i = 0; i < rows; i++) {
+                    const line = [];
+                    for (var j = 0; j < columns; j++) {
+                        line.push(Math.random() < density ? 1 : 0);
+                    }
+                    map.push(line);
+                }
+                state.map = map;
+                state.grid = new TileGrid({ map: map, tileSize: tileSize, outOfBounds: 1 });
+                state.raycaster = new Raycaster(state.grid);
+            }
+
+            function draw() {
+                const width = columns * tileSize;
+                const height = rows * tileSize;
+
+                context.clearRect(0, 0, width, height);
+                context.fillStyle = '#ffffff';
+                context.fillRect(0, 0, width, height);
+
+                context.strokeStyle = '#e9ecef';
+                context.lineWidth = 1;
+                context.beginPath();
+                for (var i = 1; i < columns; i++) {
+                    context.moveTo(i * tileSize + 0.5, 0);
+                    context.lineTo(i * tileSize + 0.5, height);
+                }
+                for (var i = 1; i < rows; i++) {
+                    context.moveTo(0, i * tileSize + 0.5);
+                    context.lineTo(width, i * tileSize + 0.5);
+                }
+                context.stroke();
+
+                context.fillStyle = '#ced4da';
+                context.strokeStyle = '#adb5bd';
+                for (var i = 0; i < rows; i++) {
+                    for (var j = 0; j < columns; j++) {
+                        if (state.map[i][j] !== 0) {
+                            context.fillRect(j * tileSize, i * tileSize, tileSize, tileSize);
+                            context.strokeRect(j * tileSize + 0.5, i * tileSize + 0.5, tileSize - 1, tileSize - 1);
+                        }
+                    }
+                }
+
+                context.strokeStyle = '#adb5bd';
+                context.lineWidth = 1;
+                context.setLineDash([4, 4]);
+                context.strokeRect(
+                    state.target.x - state.box.width / 2,
+                    state.target.y - state.box.height / 2,
+                    state.box.width,
+                    state.box.height
+                );
+                context.setLineDash([]);
+
+                for (var i = 0; i < state.probes.length; i++) {
+                    context.strokeStyle = state.probes[i].blocked ? '#dc3545' : '#cfe2ff';
+                    context.lineWidth = 1;
+                    context.beginPath();
+                    context.moveTo(state.probes[i].x, state.probes[i].y);
+                    context.lineTo(state.probes[i].endX, state.probes[i].endY);
+                    context.stroke();
+                }
+
+                context.fillStyle = '#d1e7dd';
+                context.fillRect(state.box.x, state.box.y, state.box.width, state.box.height);
+                context.strokeStyle = '#198754';
+                context.lineWidth = 1.5;
+                context.strokeRect(state.box.x + 0.5, state.box.y + 0.5, state.box.width - 1, state.box.height - 1);
+
+                markContact(state.hitX);
+                markContact(state.hitY);
+
+                report();
+            }
+
+            function report() {
+                const ground = groundBelow();
+
+                var result = 'free to go where it was asked';
+                if (state.hitX && state.hitY) {
+                    result = 'stopped on both axes';
+                }
+                else if (state.hitX) {
+                    result = 'stopped sideways, free to slide up and down';
+                }
+                else if (state.hitY) {
+                    result = 'stopped vertically, free to slide left and right';
+                }
+
+                const details = [
+                    [
+                        ['box', '(' + round(state.box.x) + ', ' + round(state.box.y) + ') ' + state.box.width + '×' + state.box.height],
+                        ['requested', '(' + round(state.requested.x) + ', ' + round(state.requested.y) + ')'],
+                        ['allowed', '(' + round(state.allowed.x) + ', ' + round(state.allowed.y) + ')'],
+                        ['rays cast', String(state.probes.length)]
+                    ],
+                    [
+                        ['sweeps', sweepSummary()]
+                    ],
+                    [
+                        ['result', result]
+                    ],
+                    [
+                        ['stopped sideways by', state.hitX ? contactOf(state.hitX) : '-'],
+                        ['stopped vertically by', state.hitY ? contactOf(state.hitY) : '-'],
+                        ['ground below', ground === null ? 'none within ' + tileSize * 3 : round(ground)],
+                        ['ray spacing', String(spacing)]
+                    ]
+                ];
+
+                renderTable('details', details);
+            }
+
+            function move(targetX, targetY) {
+                const wasX = state.box.x;
+                const wasY = state.box.y;
+
+                state.target.x = targetX;
+                state.target.y = targetY;
+                state.requested.x = targetX - (state.box.x + state.box.width / 2);
+                state.requested.y = targetY - (state.box.y + state.box.height / 2);
+                state.probes = [];
+
+                const stopped = moveBox(state.box, state.requested.x, state.requested.y, state.probes);
+                state.allowed.x = state.box.x - wasX;
+                state.allowed.y = state.box.y - wasY;
+                state.hitX = stopped.hitX;
+                state.hitY = stopped.hitY;
+
+                draw();
+            }
+
+            function moveBox(box, deltaX, deltaY, probes) {
+                const hitX = sweepEdge(box, deltaX, 0, probes);
+                if (hitX) {
+                    box.x += Math.sign(deltaX) * Math.max(0, hitX.distance - skin);
+                }
+                else {
+                    box.x += deltaX;
+                }
+
+                const hitY = sweepEdge(box, 0, deltaY, probes);
+                if (hitY) {
+                    box.y += Math.sign(deltaY) * Math.max(0, hitY.distance - skin);
+                }
+                else {
+                    box.y += deltaY;
+                }
+
+                return { hitX: hitX, hitY: hitY };
+            }
+
+            function sweepEdge(box, deltaX, deltaY, probes) {
+                const reach = Math.abs(deltaX) + Math.abs(deltaY);
+                if (reach < 0.000001) {
+                    return null;
+                }
+
+                const directionX = Math.sign(deltaX);
+                const directionY = Math.sign(deltaY);
+
+                var startX = box.x + inset;
+                var startY = box.y + inset;
+                var endX = box.x + box.width - inset;
+                var endY = box.y + box.height - inset;
+
+                if (directionX !== 0) {
+                    startX = directionX > 0 ? box.x + box.width : box.x;
+                    endX = startX;
+                }
+                else {
+                    startY = directionY > 0 ? box.y + box.height : box.y;
+                    endY = startY;
+                }
+
+                const edge = Math.hypot(endX - startX, endY - startY);
+                const count = Math.max(2, Math.ceil(edge / spacing) + 1);
+                var nearest = null;
+
+                for (var i = 0; i < count; i++) {
+                    const along = i / (count - 1);
+                    const originX = startX + (endX - startX) * along;
+                    const originY = startY + (endY - startY) * along;
+                    const hit = state.raycaster.cast(originX, originY, directionX, directionY, reach, {
+                        ignoreInside: true
+                    });
+                    const travelled = hit ? hit.distance : reach;
+
+                    probes.push({
+                        x: originX,
+                        y: originY,
+                        endX: originX + directionX * travelled,
+                        endY: originY + directionY * travelled,
+                        blocked: hit !== null
+                    });
+
+                    if (hit && (nearest === null || hit.distance < nearest.distance)) {
+                        nearest = hit;
+                    }
+                }
+
+                return nearest;
+            }
+
+            function markContact(hit) {
+                if (!hit) {
+                    return;
+                }
+
+                context.fillStyle = '#dc3545';
+                context.beginPath();
+                context.arc(hit.pointX, hit.pointY, 3.5, 0, Math.PI * 2);
+                context.fill();
+
+                context.strokeStyle = '#dc3545';
+                context.lineWidth = 1;
+                context.beginPath();
+                context.moveTo(hit.pointX, hit.pointY);
+                context.lineTo(hit.pointX + hit.normalX * 12, hit.pointY + hit.normalY * 12);
+                context.stroke();
+            }
+
+            function groundBelow() {
+                const hit = sweepEdge(state.box, 0, tileSize * 3, []);
+                return hit ? hit.distance : null;
+            }
+
+            function sweepSummary() {
+                const sideways = state.requested.x === 0 ? 'still' : (state.hitX ? 'blocked after ' + round(Math.abs(state.allowed.x)) + ' of ' + round(Math.abs(state.requested.x)) : 'clear, all ' + round(Math.abs(state.requested.x)));
+                const vertical = state.requested.y === 0 ? 'still' : (state.hitY ? 'blocked after ' + round(Math.abs(state.allowed.y)) + ' of ' + round(Math.abs(state.requested.y)) : 'clear, all ' + round(Math.abs(state.requested.y)));
+                return 'sideways: ' + sideways + ' - vertical: ' + vertical;
+            }
+
+            function contactOf(hit) {
+                return 'cell (' + hit.cellX + ', ' + hit.cellY + ') at (' + round(hit.pointX) + ', ' + round(hit.pointY) + ') ' + faceName(hit);
+            }
+
+            function pointerAt(event) {
+                const rect = canvas.getBoundingClientRect();
+                return {
+                    x: (event.clientX - rect.left) * (columns * tileSize / rect.width),
+                    y: (event.clientY - rect.top) * (rows * tileSize / rect.height)
+                };
+            }
+        </script>
+    </body>
+</html>

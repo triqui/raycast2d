@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>08 - Fog of war</title>
+        <link rel="stylesheet" href="style.css">
+    </head>
+    <body>
+        <main>
+            <div id="menu"></div>
+            <h1>08 - Fog of war</h1>
+
+            <canvas id="view" width="640" height="384"></canvas>
+
+            <div id="intro">
+                The ring marks the viewer and follows the pointer. Drag it around the map: what has been seen stays seen.
+                <br />
+                <button class="pick" id="forget" type="button">Forget what was seen</button>
+                <button class="pick" id="regenerate" type="button">Generate new layout</button>
+            </div>
+
+            <div id="details"></div>
+
+            <div id="usage">
+                <p>
+                    <code>cast(originX, originY, directionX, directionY, maxDistance, options)</code>
+                    <br />
+                    Finds where each ray of the fan stops.
+                </p>
+
+                <p>
+                    <code>each(originX, originY, directionX, directionY, maxDistance, callback, options)</code>
+                    <br />
+                    Walks that same ray again, only as far as it got, and reports every cell it crossed.
+                    <br />
+                    It is the only query that reports empty cells, which is what a fog needs: every other one answers with obstacles, so a fog built on them would reveal the walls and leave the floor between them dark.
+                </p>
+
+                <p>
+                    This is also the only example that remembers. The others recompute everything on every frame; a fog is a set that only grows, which is why a cell can be in three states rather than two.
+                </p>
+
+                <ul>
+                    <li>Never seen: covered by the dark layer.</li>
+                    <li>Seen once and remembered: covered by the faded layer.</li>
+                    <li>In sight right now: not covered at all.</li>
+                </ul>
+            </div>
+        </main>
+
+        <script type="module">
+            import { Raycaster, TileGrid } from '../src/raycast.js';
+            import { renderMenu, renderTable, round, cellOf } from './script.js';
+
+            const tileSize = 32;
+            const rows = 15;
+            const columns = 25;
+            const density = 0.16;
+            const rayCount = 240;
+            const sight = 220;
+
+            const canvas = document.getElementById('view');
+            const context = canvas.getContext('2d');
+            canvas.width = columns * tileSize;
+            canvas.height = rows * tileSize;
+
+            const state = {
+                map: null,
+                grid: null,
+                raycaster: null,
+                viewer: { x: 400, y: 240 },
+                revealed: new Set(),
+                visible: new Set(),
+                discovered: [],
+                blocked: 0
+            };
+
+            canvas.addEventListener('pointermove', function (event) {
+                const point = pointerAt(event);
+                state.viewer.x = point.x;
+                state.viewer.y = point.y;
+                look();
+                draw();
+            });
+
+            document.getElementById('forget').addEventListener('click', function () {
+                state.revealed = new Set();
+                look();
+                draw();
+            });
+
+            document.getElementById('regenerate').addEventListener('click', function () {
+                generate();
+                state.revealed = new Set();
+                look();
+                draw();
+            });
+
+            renderMenu('menu', '08.html');
+            generate();
+            look();
+            draw();
+
+            function generate() {
+                const map = [];
+                for (var i = 0; i < rows; i++) {
+                    const line = [];
+                    for (var j = 0; j < columns; j++) {
+                        line.push(Math.random() < density ? 1 : 0);
+                    }
+                    map.push(line);
+                }
+                state.map = map;
+                state.grid = new TileGrid({ map: map, tileSize: tileSize, outOfBounds: 1 });
+                state.raycaster = new Raycaster(state.grid);
+            }
+
+            function draw() {
+                const width = columns * tileSize;
+                const height = rows * tileSize;
+
+                context.clearRect(0, 0, width, height);
+                context.fillStyle = '#ffffff';
+                context.fillRect(0, 0, width, height);
+
+                context.strokeStyle = '#e9ecef';
+                context.lineWidth = 1;
+                context.beginPath();
+                for (var i = 1; i < columns; i++) {
+                    context.moveTo(i * tileSize + 0.5, 0);
+                    context.lineTo(i * tileSize + 0.5, height);
+                }
+                for (var i = 1; i < rows; i++) {
+                    context.moveTo(0, i * tileSize + 0.5);
+                    context.lineTo(width, i * tileSize + 0.5);
+                }
+                context.stroke();
+
+                context.fillStyle = '#ced4da';
+                context.strokeStyle = '#adb5bd';
+                for (var i = 0; i < rows; i++) {
+                    for (var j = 0; j < columns; j++) {
+                        if (state.map[i][j] !== 0) {
+                            context.fillRect(j * tileSize, i * tileSize, tileSize, tileSize);
+                            context.strokeRect(j * tileSize + 0.5, i * tileSize + 0.5, tileSize - 1, tileSize - 1);
+                        }
+                    }
+                }
+
+                for (var i = 0; i < rows; i++) {
+                    for (var j = 0; j < columns; j++) {
+                        const key = j + ',' + i;
+                        if (!state.revealed.has(key)) {
+                            context.fillStyle = '#343a40';
+                            context.fillRect(j * tileSize, i * tileSize, tileSize, tileSize);
+                        }
+                        else if (!state.visible.has(key)) {
+                            context.fillStyle = 'rgba(52, 58, 64, 0.45)';
+                            context.fillRect(j * tileSize, i * tileSize, tileSize, tileSize);
+                        }
+                    }
+                }
+
+                context.strokeStyle = '#0d6efd';
+                context.lineWidth = 1.5;
+                context.beginPath();
+                context.arc(state.viewer.x, state.viewer.y, 5, 0, Math.PI * 2);
+                context.stroke();
+
+                report();
+            }
+
+            function report() {
+                const total = rows * columns;
+                const remembered = state.revealed.size - state.visible.size;
+                const unseen = total - state.revealed.size;
+
+                const details = [
+                    [
+                        ['viewer', '(' + round(state.viewer.x) + ', ' + round(state.viewer.y) + ') cell (' + cellOf(state.viewer, state.grid) + ')'],
+                        ['rays', String(rayCount)],
+                        ['sight range', String(sight)],
+                        ['rays blocked', state.blocked + ' of ' + rayCount]
+                    ],
+                    [
+                        ['just discovered', cellList(state.discovered)]
+                    ],
+                    [
+                        ['result', state.visible.size + ' cells in sight, ' + remembered + ' remembered from before, ' + unseen + ' never seen']
+                    ],
+                    [
+                        ['in sight now', String(state.visible.size)],
+                        ['remembered', String(remembered)],
+                        ['never seen', String(unseen)],
+                        ['explored', state.revealed.size + ' of ' + total + ' - ' + round(state.revealed.size / total * 100) + '%']
+                    ]
+                ];
+
+                renderTable('details', details);
+            }
+
+            function look() {
+                state.visible = new Set();
+                state.discovered = [];
+                state.blocked = 0;
+
+                for (var i = 0; i < rayCount; i++) {
+                    const angle = (i / rayCount) * Math.PI * 2;
+                    const directionX = Math.cos(angle);
+                    const directionY = Math.sin(angle);
+                    const hit = state.raycaster.cast(state.viewer.x, state.viewer.y, directionX, directionY, sight, {
+                        ignoreInside: true
+                    });
+                    const reach = hit ? hit.distance : sight;
+
+                    if (hit) {
+                        state.blocked += 1;
+                    }
+
+                    state.raycaster.each(state.viewer.x, state.viewer.y, directionX, directionY, reach, function (candidate) {
+                        const key = candidate.cellX + ',' + candidate.cellY;
+                        state.visible.add(key);
+                        if (!state.revealed.has(key)) {
+                            state.revealed.add(key);
+                            state.discovered.push(key);
+                        }
+                    }, {
+                        filter: function () { return true; }
+                    });
+                }
+            }
+
+            function cellList(keys) {
+                if (keys.length === 0) {
+                    return 'nothing new here';
+                }
+                return keys.length + ': ' + keys.map(function (key) {
+                    return '(' + key.replace(',', ', ') + ')';
+                }).join(' ');
+            }
+
+            function pointerAt(event) {
+                const rect = canvas.getBoundingClientRect();
+                return {
+                    x: (event.clientX - rect.left) * (columns * tileSize / rect.width),
+                    y: (event.clientY - rect.top) * (rows * tileSize / rect.height)
+                };
+            }
+        </script>
+    </body>
+</html>

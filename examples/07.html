@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>07 - Definitions and filters</title>
+        <link rel="stylesheet" href="style.css">
+    </head>
+    <body>
+        <main>
+            <div id="menu"></div>
+            <h1>07 - Definitions and filters</h1>
+
+            <canvas id="view" width="640" height="384"></canvas>
+
+            <div id="intro">
+                Drag the ring to reposition the source. The cross marks the destination and follows the pointer.
+            </div>
+
+            <div id="details"></div>
+
+            <div id="usage">
+                <p>
+                    <code>new TileGrid({ map, tileSize, definitions })</code>
+                    <br />
+                    A definition is whatever you want it to be. The library reads none of its fields: it hands the definition of whatever the ray met to the filter, on <code>candidate.userData</code>, and lets it decide.
+                </p>
+
+                <ul>
+                    <li><code>wall</code>: stops sight, bodies and shots.</li>
+                    <li><code>grate</code>: stops bodies and shots, but can be seen through.</li>
+                    <li><code>glass</code>: stops bodies only.</li>
+                    <li><code>water</code>: stops nothing.</li>
+                </ul>
+
+                <p>
+                    <code>options.filter</code>
+                    <br />
+                    A filter answers one question: does this stop the ray? That is where the rules of the problem live, and why the library ships almost none of them.
+                    <br />
+                    The three colored rays are three casts along the same line, over the same map, with three different one-line filters, and they stop in three different places.
+                </p>
+
+                <p>
+                    <code>lineOfSight(startX, startY, endX, endY, options)</code>
+                    <br />
+                    The same cast reduced to a yes or no, for when the contact does not matter and only the answer does.
+                </p>
+            </div>
+        </main>
+
+        <script type="module">
+            import { Raycaster, TileGrid } from '../src/raycast.js';
+            import { renderMenu, renderTable, round, cellOf } from './script.js';
+
+            const tileSize = 32;
+            const grabRadius = 16;
+
+            const legend = { '.': 0, '#': 1, 'G': 2, '=': 3, '~': 4 };
+
+            const plan = [
+                '#########################',
+                '#.......G.......=.......#',
+                '#.......G.......=.......#',
+                '#.......G.......=.......#',
+                '#.......G.......=..###..#',
+                '#..###..G.......=.......#',
+                '#.......G.......=.......#',
+                '#.......G.......=.......#',
+                '#.......G.......=..~~~~.#',
+                '#.......G.......=..~~~~.#',
+                '#..###..G.......=..~~~~.#',
+                '#.......G.......=.......#',
+                '#.......G.......=.......#',
+                '#.......................#',
+                '#########################'
+            ];
+
+            const definitions = {
+                1: { name: 'wall', stopsSight: true, stopsBody: true, stopsShot: true, fill: '#ced4da', line: '#adb5bd' },
+                2: { name: 'glass', stopsSight: false, stopsBody: true, stopsShot: false, fill: '#e2d9f3', line: '#6f42c1' },
+                3: { name: 'grate', stopsSight: false, stopsBody: true, stopsShot: true, fill: '#ffe69c', line: '#ffc107' },
+                4: { name: 'water', stopsSight: false, stopsBody: false, stopsShot: false, fill: '#cff4fc', line: '#0dcaf0' }
+            };
+
+            const viewpoints = [
+                {
+                    label: 'an eye',
+                    color: '#0d6efd',
+                    filter: function (candidate) { return Boolean(candidate.userData) && candidate.userData.stopsSight; }
+                },
+                {
+                    label: 'a body',
+                    color: '#198754',
+                    filter: function (candidate) { return Boolean(candidate.userData) && candidate.userData.stopsBody; }
+                },
+                {
+                    label: 'a shot',
+                    color: '#dc3545',
+                    filter: function (candidate) { return Boolean(candidate.userData) && candidate.userData.stopsShot; }
+                }
+            ];
+
+            const columns = plan[0].length;
+            const rows = plan.length;
+
+            const canvas = document.getElementById('view');
+            const context = canvas.getContext('2d');
+            canvas.width = columns * tileSize;
+            canvas.height = rows * tileSize;
+
+            const map = plan.map(function (line) {
+                return line.split('').map(function (character) {
+                    return legend[character];
+                });
+            });
+
+            const grid = new TileGrid({ map: map, tileSize: tileSize, definitions: definitions });
+            const raycaster = new Raycaster(grid);
+
+            const state = {
+                start: { x: 80, y: 208 },
+                finish: { x: 720, y: 208 },
+                grabbed: null
+            };
+
+            canvas.addEventListener('pointerdown', function (event) {
+                const point = pointerAt(event);
+                const nearStart = Math.hypot(point.x - state.start.x, point.y - state.start.y) < grabRadius;
+                state.grabbed = nearStart ? state.start : state.finish;
+                canvas.setPointerCapture(event.pointerId);
+                moveEnd(state.grabbed, point);
+            });
+
+            canvas.addEventListener('pointermove', function (event) {
+                moveEnd(state.grabbed || state.finish, pointerAt(event));
+            });
+
+            canvas.addEventListener('pointerup', function () {
+                state.grabbed = null;
+            });
+
+            canvas.addEventListener('pointercancel', function () {
+                state.grabbed = null;
+            });
+
+            renderMenu('menu', '07.html');
+            draw();
+
+            function draw() {
+                const width = columns * tileSize;
+                const height = rows * tileSize;
+                const shots = castAll();
+                const ordered = shots.slice().sort(function (left, right) {
+                    return right.distance - left.distance;
+                });
+
+                context.clearRect(0, 0, width, height);
+                context.fillStyle = '#ffffff';
+                context.fillRect(0, 0, width, height);
+
+                context.strokeStyle = '#e9ecef';
+                context.lineWidth = 1;
+                context.beginPath();
+                for (var i = 1; i < columns; i++) {
+                    context.moveTo(i * tileSize + 0.5, 0);
+                    context.lineTo(i * tileSize + 0.5, height);
+                }
+                for (var i = 1; i < rows; i++) {
+                    context.moveTo(0, i * tileSize + 0.5);
+                    context.lineTo(width, i * tileSize + 0.5);
+                }
+                context.stroke();
+
+                for (var i = 0; i < rows; i++) {
+                    for (var j = 0; j < columns; j++) {
+                        const definition = definitions[map[i][j]];
+                        if (definition) {
+                            context.fillStyle = definition.fill;
+                            context.fillRect(j * tileSize, i * tileSize, tileSize, tileSize);
+                            context.strokeStyle = definition.line;
+                            context.lineWidth = 1;
+                            context.strokeRect(j * tileSize + 0.5, i * tileSize + 0.5, tileSize - 1, tileSize - 1);
+                        }
+                    }
+                }
+
+                context.strokeStyle = '#adb5bd';
+                context.lineWidth = 1;
+                context.setLineDash([4, 4]);
+                context.beginPath();
+                context.moveTo(state.start.x, state.start.y);
+                context.lineTo(state.finish.x, state.finish.y);
+                context.stroke();
+                context.setLineDash([]);
+
+                context.lineWidth = 2.5;
+                for (var i = 0; i < ordered.length; i++) {
+                    context.strokeStyle = ordered[i].viewpoint.color;
+                    context.beginPath();
+                    context.moveTo(state.start.x, state.start.y);
+                    context.lineTo(ordered[i].stopX, ordered[i].stopY);
+                    context.stroke();
+                }
+
+                for (var i = 0; i < ordered.length; i++) {
+                    if (ordered[i].hit) {
+                        context.fillStyle = ordered[i].viewpoint.color;
+                        context.beginPath();
+                        context.arc(ordered[i].stopX, ordered[i].stopY, 4, 0, Math.PI * 2);
+                        context.fill();
+                        context.strokeStyle = '#ffffff';
+                        context.lineWidth = 1;
+                        context.stroke();
+                    }
+                }
+
+                context.strokeStyle = '#212529';
+                context.lineWidth = state.grabbed === state.start ? 2.5 : 1.5;
+                context.beginPath();
+                context.arc(state.start.x, state.start.y, 5, 0, Math.PI * 2);
+                context.stroke();
+
+                context.lineWidth = state.grabbed === state.finish ? 2.5 : 1.5;
+                context.beginPath();
+                context.moveTo(state.finish.x - 6, state.finish.y);
+                context.lineTo(state.finish.x + 6, state.finish.y);
+                context.moveTo(state.finish.x, state.finish.y - 6);
+                context.lineTo(state.finish.x, state.finish.y + 6);
+                context.stroke();
+
+                report(shots);
+            }
+
+            function report(shots) {
+                const deltaX = state.finish.x - state.start.x;
+                const deltaY = state.finish.y - state.start.y;
+                const span = Math.hypot(deltaX, deltaY);
+                const angle = Math.atan2(deltaY, deltaX) * 180 / Math.PI;
+                const visible = raycaster.lineOfSight(state.start.x, state.start.y, state.finish.x, state.finish.y, {
+                    filter: viewpoints[0].filter,
+                    ignoreInside: true
+                });
+                const result = shots.map(function (shot) {
+                    return shot.viewpoint.label + ' ' + (shot.hit ? 'stops at ' + shot.hit.userData.name : 'gets through');
+                }).join(', ');
+
+                const details = [
+                    [
+                        ['start', '(' + round(state.start.x) + ', ' + round(state.start.y) + ') cell (' + cellOf(state.start, grid) + ')'],
+                        ['finish', '(' + round(state.finish.x) + ', ' + round(state.finish.y) + ') cell (' + cellOf(state.finish, grid) + ')'],
+                        ['length', round(span)],
+                        ['angle', round(angle) + '°']
+                    ],
+                    [
+                        ['materials', materialList()]
+                    ],
+                    [
+                        ['result', result]
+                    ],
+                    [
+                        ['as an eye', outcomeOf(shots[0])],
+                        ['as a body', outcomeOf(shots[1])],
+                        ['as a shot', outcomeOf(shots[2])],
+                        ['lineOfSight()', visible ? 'true - the two can see each other' : 'false']
+                    ]
+                ];
+
+                renderTable('details', details);
+            }
+
+            function castAll() {
+                return viewpoints.map(function (viewpoint) {
+                    const hit = raycaster.castTo(state.start.x, state.start.y, state.finish.x, state.finish.y, {
+                        filter: viewpoint.filter,
+                        ignoreInside: true
+                    });
+                    const deltaX = state.finish.x - state.start.x;
+                    const deltaY = state.finish.y - state.start.y;
+
+                    return {
+                        viewpoint: viewpoint,
+                        hit: hit,
+                        distance: hit ? hit.distance : Math.hypot(deltaX, deltaY),
+                        stopX: hit ? hit.pointX : state.finish.x,
+                        stopY: hit ? hit.pointY : state.finish.y
+                    };
+                });
+            }
+
+            function outcomeOf(shot) {
+                const colors = swatch(shot.viewpoint.color, shot.viewpoint.color);
+                if (!shot.hit) {
+                    return colors + 'through';
+                }
+                return colors + shot.hit.userData.name + ' at ' + round(shot.hit.distance);
+            }
+
+            function materialList() {
+                return Object.keys(definitions).map(function (id) {
+                    const definition = definitions[id];
+                    const stops = [];
+                    if (definition.stopsSight) {
+                        stops.push('sight');
+                    }
+                    if (definition.stopsBody) {
+                        stops.push('bodies');
+                    }
+                    if (definition.stopsShot) {
+                        stops.push('shots');
+                    }
+                    return swatch(definition.fill, definition.line) + definition.name + ': ' + (stops.length === 0 ? 'stops nothing' : 'stops ' + stops.join(', '));
+                }).join(' ');
+            }
+
+            function swatch(fill, line) {
+                return '<span style="display: inline-block; width: 10px; height: 10px; margin-right: 4px; background: ' +
+                    fill + '; border: 1px solid ' + line + '"></span>';
+            }
+
+            function pointerAt(event) {
+                const rect = canvas.getBoundingClientRect();
+                return {
+                    x: (event.clientX - rect.left) * (columns * tileSize / rect.width),
+                    y: (event.clientY - rect.top) * (rows * tileSize / rect.height)
+                };
+            }
+
+            function moveEnd(end, point) {
+                end.x = point.x;
+                end.y = point.y;
+                draw();
+            }
+        </script>
+    </body>
+</html>
