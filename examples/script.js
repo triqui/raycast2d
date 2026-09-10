@@ -1,15 +1,16 @@
 export const examples = [
-    { file: '01.html', title: '01 - A ray between two points', description: 'One ray, one contact, and the cells it crosses on the way.' },
-    { file: '02.html', title: '02 - Every contact along a ray', description: 'Every contact along a ray, and the walls they merge into.' },
-    { file: '03.html', title: '03 - Two sources at once', description: 'A tile grid and a set of loose rectangles, asked together.' },
-    { file: '04.html', title: '04 - A fan of rays', description: 'Four hundred casts, and the polygon their endpoints trace.' },
-    { file: '05.html', title: '05 - Moving a rectangle', description: 'How far a rectangle can go, decided by a row of rays.' },
-    { file: '06.html', title: '06 - A ray that bounces', description: 'Cast, reflect about the normal, repeat, on a shrinking budget.' },
-    { file: '07.html', title: '07 - Definitions and filters', description: 'The same ray cast three times, with three different filters.' },
-    { file: '08.html', title: '08 - Fog of war', description: 'The only page that remembers what it has already seen.' },
-    { file: '09.html', title: '09 - Thin walls and one-way surfaces', description: 'Thin is geometry, one-way is a rule, and the two are separate.' },
-    { file: '10.html', title: '10 - A cone of vision', description: 'A guard, a thirty degree cone, and something to hide from it.' }
+    { file: '01.html', title: '01 - A ray between two points', description: 'Casts one ray between two points and reports what stops it.' },
+    { file: '02.html', title: '02 - Every contact along a ray', description: 'Reports every wall along a ray, not only the first one.' },
+    { file: '03.html', title: '03 - Two sources at once', description: 'Casts against a tile grid and loose rectangles at the same time.' },
+    { file: '04.html', title: '04 - A fan of rays', description: 'Casts two hundred rays around a point to draw what it can see.' },
+    { file: '05.html', title: '05 - Moving a rectangle', description: 'Moves a rectangle through the map with rays from its leading edge.' },
+    { file: '06.html', title: '06 - A ray that bounces', description: 'Reflects a ray off every surface it meets until its budget runs out.' },
+    { file: '07.html', title: '07 - Definitions and filters', description: 'Casts the same ray three times with three different filters.' },
+    { file: '08.html', title: '08 - Fog of war', description: 'Remembers which cells have already been seen.' },
+    { file: '09.html', title: '09 - Thin walls and one-way surfaces', description: 'Shows the difference between thin geometry and a one-way rule.' },
+    { file: '10.html', title: '10 - A cone of vision', description: 'Checks whether a guard can see a box inside its vision cone.' }
 ];
+
 
 export function renderMenu(id, current) {
     const here = current || window.location.pathname.split('/').pop();
