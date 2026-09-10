@@ -33,7 +33,6 @@ Features:
 <https://triqui.github.io/raycast2d/examples/>
 
 | | | |
-| --- | --- | --- |
 | [01](https://triqui.github.io/raycast2d/examples/01.html) | A ray between two points |
 | [02](https://triqui.github.io/raycast2d/examples/02.html) | Every contact along a ray |
 | [03](https://triqui.github.io/raycast2d/examples/03.html) | Two sources at once |
